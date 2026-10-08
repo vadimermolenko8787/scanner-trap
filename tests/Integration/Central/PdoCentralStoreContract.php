@@ -66,6 +66,19 @@ abstract class PdoCentralStoreContract extends TestCase
         $this->assertSame($version + 4, $store->version());
     }
 
+    public function test_two_store_instances_bump_the_same_version_counter(): void
+    {
+        $first = $this->installed();
+        $second = new PdoCentralStore($this->pdo);
+        $version = $first->version();
+
+        $first->addPattern('/.git', 'ops');
+        $second->addPattern('/.svn', 'ops');
+
+        $this->assertSame($version + 2, $first->version());
+        $this->assertSame($version + 2, $second->version());
+    }
+
     public function test_an_event_merges_into_the_active_block_and_keeps_the_later_expiry(): void
     {
         $store = $this->installed();

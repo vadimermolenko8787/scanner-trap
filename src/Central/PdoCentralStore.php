@@ -39,10 +39,13 @@ final class PdoCentralStore implements CentralStore
 
     public function install(array $patterns, array $allow, string $by): void
     {
-        $this->transaction(function () use ($patterns, $allow, $by): void {
+        // DDL first and outside the transaction: MySQL commits implicitly on CREATE TABLE
+        $this->guarded(function (): void {
             foreach (PdoSchema::statements($this->driver, $this->prefix) as $sql) {
                 $this->pdo->exec($sql);
             }
+        });
+        $this->transaction(function () use ($patterns, $allow, $by): void {
             if ($this->meta('owner') === null) {
                 $this->execute("INSERT INTO {$this->prefix}meta (name, value) VALUES ('owner', ?)", [bin2hex(random_bytes(16))]);
             }
@@ -237,7 +240,8 @@ final class PdoCentralStore implements CentralStore
 
     private function bumpVersion(): void
     {
-        $this->execute("UPDATE {$this->prefix}meta SET value = ? WHERE name = 'version'", [(string) ((int) ($this->meta('version') ?? 0) + 1)]);
+        $cast = $this->driver === 'mysql' ? 'CAST(CAST(value AS UNSIGNED) + 1 AS CHAR)' : 'CAST(CAST(value AS BIGINT) + 1 AS VARCHAR(255))';
+        $this->execute("UPDATE {$this->prefix}meta SET value = {$cast} WHERE name = 'version'", []);
     }
 
     private function meta(string $name): ?string
