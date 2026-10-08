@@ -40,8 +40,10 @@ trap failed open.
 with `scanner-trap.php`:
 
     return [
-        'local' => ['type' => 'redis', 'host' => '10.0.0.5', 'port' => 6379, 'database' => 0, 'prefix' => 'scanner-trap:'],
-        // 'password' => '…' when Redis needs one
+        'local' => [
+            'type' => 'redis', 'host' => '10.0.0.5', 'port' => 6379, 'database' => 0, 'prefix' => 'scanner-trap:',
+            // 'password' => '…', when Redis needs one
+        ],
         'blocking' => false, // watch first, then switch to true
     ];
 
