@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ScannerTrap\Tests\Integration;
 
 use PHPUnit\Framework\TestCase;
+use ScannerTrap\AllowEntry;
 use ScannerTrap\Block;
 use ScannerTrap\Central\CentralStore;
 use ScannerTrap\Central\PdoCentralStore;
@@ -253,5 +254,125 @@ final class SyncTest extends TestCase
         (new Sync($this->a, $this->central))->pull();
         $this->assertSame('own', $this->a->read('91.92.249.1')->listed);
         $this->assertSame(['own'], array_keys($this->a->listStatus()));
+    }
+
+    public function test_hits_of_a_shipped_batch_escalate_even_when_a_later_batch_fails(): void
+    {
+        $policy = new SubnetPolicy();
+        $guard = new Guard($this->a, true, 600, 'web-a', [], ['/.env*']);
+        foreach (['45.155.205.1', '45.155.205.2', '45.155.205.3'] as $ip) {
+            $guard->decide(new RequestContext($ip, 'GET', '/.env'));
+        }
+        for ($i = 0; $i < 198; $i++) {
+            $guard->decide(new RequestContext('91.' . intdiv($i, 250) . '.' . ($i % 250) . '.1', 'GET', '/.env'));
+        }
+        $this->assertCount(201, $this->a->events(1000));
+
+        $failing = new class ($this->central) implements CentralStore {
+            private int $batches = 0;
+
+            public function __construct(private readonly PdoCentralStore $inner)
+            {
+            }
+
+            public function insertBlocks(array $blocks): void
+            {
+                // Only shipped batches count; the escalation's own network block must go through
+                if ($blocks !== [] && !$blocks[0]->isNetwork() && ++$this->batches === 2) {
+                    throw new StoreException('second batch fails');
+                }
+                $this->inner->insertBlocks($blocks);
+            }
+
+            public function install(array $patterns, array $allow, string $by): void
+            {
+                $this->inner->install($patterns, $allow, $by);
+            }
+
+            public function owner(): string
+            {
+                return $this->inner->owner();
+            }
+
+            public function version(): int
+            {
+                return $this->inner->version();
+            }
+
+            public function blocks(bool $activeOnly = true, ?string $ip = null, int $limit = 1000): array
+            {
+                return $this->inner->blocks($activeOnly, $ip, $limit);
+            }
+
+            public function lift(string $ip, string $by): int
+            {
+                return $this->inner->lift($ip, $by);
+            }
+
+            public function patterns(): array
+            {
+                return $this->inner->patterns();
+            }
+
+            public function addPattern(string $pattern, string $by): bool
+            {
+                return $this->inner->addPattern($pattern, $by);
+            }
+
+            public function removePattern(string $pattern): bool
+            {
+                return $this->inner->removePattern($pattern);
+            }
+
+            public function allowEntries(): array
+            {
+                return $this->inner->allowEntries();
+            }
+
+            public function saveAllow(AllowEntry $entry): void
+            {
+                $this->inner->saveAllow($entry);
+            }
+
+            public function removeAllow(string $entry): bool
+            {
+                return $this->inner->removeAllow($entry);
+            }
+
+            public function replaceList(string $source, array $networks, int $at): bool
+            {
+                return $this->inner->replaceList($source, $networks, $at);
+            }
+
+            public function listEntries(string $source): array
+            {
+                return $this->inner->listEntries($source);
+            }
+
+            public function listStatus(): array
+            {
+                return $this->inner->listStatus();
+            }
+
+            public function listsVersion(): int
+            {
+                return $this->inner->listsVersion();
+            }
+
+            public function recentTrapIps(int $since): array
+            {
+                return $this->inner->recentTrapIps($since);
+            }
+        };
+
+        try {
+            (new Sync($this->a, $failing, null, $policy))->push();
+            $this->fail('The second batch should have thrown');
+        } catch (StoreException) {
+        }
+
+        $network = $this->central->blocks(true, '45.155.205.0/24');
+        $this->assertCount(1, $network);
+        $this->assertTrue($network[0]->isNetwork());
     }
 }

@@ -33,7 +33,6 @@ final class Sync
         $this->assertOwner();
         $pushed = 0;
         $previous = null;
-        $hits = [];
         while (($events = $this->local->events(self::BATCH)) !== []) {
             if (array_keys($events) === $previous) {
                 throw new StoreException('The local store did not drop the events it shipped; nothing more was pushed');
@@ -42,14 +41,11 @@ final class Sync
             $this->central->insertBlocks(array_values($events));
             $this->local->ackEvents(array_map('strval', $previous));
             $pushed += count($events);
-            foreach ($events as $event) {
-                if ($event->source === Block::SOURCE_TRAP && !$event->isNetwork()) {
-                    $hits[] = $event;
-                }
+            // Per batch: once acked, a batch's hits are gone locally and a later failure must not lose them
+            $hits = array_filter($events, static fn (Block $event): bool => $event->source === Block::SOURCE_TRAP && !$event->isNetwork());
+            if ($hits !== []) {
+                $this->escalateCentrally(array_values($hits));
             }
-        }
-        if ($hits !== []) {
-            $this->escalateCentrally($hits);
         }
         if ($pushed > 0) {
             $this->logger?->info('Scanner trap: pushed {count} block events', ['count' => $pushed]);
