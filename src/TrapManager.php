@@ -250,8 +250,10 @@ final class TrapManager
             $previous = $before[$list->name]['count'] ?? 0;
             try {
                 $result = $this->importer->import($list);
+                $networks = count($result['networks']);
                 $this->replaceList($list->name, $result['networks']);
-                $report[$list->name] = ['networks' => count($result['networks']), 'previous' => $previous, 'invalid' => $result['invalid'], 'reserved' => $result['reserved'], 'tooWide' => $result['tooWide'], 'error' => null];
+                $report[$list->name] = ['networks' => $networks, 'previous' => $previous, 'invalid' => $result['invalid'], 'reserved' => $result['reserved'], 'tooWide' => $result['tooWide'], 'error' => null];
+                unset($result); // the parsed networks are not needed any more: the next source's must not sit beside them
             } catch (StoreException|RefusedException $e) {
                 $report[$list->name] = ['networks' => 0, 'previous' => $previous, 'invalid' => 0, 'reserved' => 0, 'tooWide' => 0, 'error' => $e->getMessage()];
             }

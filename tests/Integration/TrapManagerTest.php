@@ -421,6 +421,31 @@ final class TrapManagerTest extends TestCase
         $this->assertSame(['198.51.0.1'], array_map(static fn (Block $b): string => $b->ip, $manager->blocks(true, '198.51.0.1')));
     }
 
+    public function test_importing_200_000_networks_twice_fits_a_small_memory_limit(): void
+    {
+        $list = (string) tempnam(sys_get_temp_dir(), 'list-');
+        $database = (string) tempnam(sys_get_temp_dir(), 'scanner-trap-');
+        $lines = [];
+        for ($i = 0; $i < 200_000; $i++) {
+            $lines[] = sprintf('45.%d.%d.%d', intdiv($i, 65536) % 256, intdiv($i, 256) % 256, $i % 256);
+        }
+        file_put_contents($list, implode("\n", $lines));
+        unset($lines);
+
+        $process = proc_open(
+            [PHP_BINARY, '-d', 'memory_limit=128M', __DIR__ . '/../fixtures/import-big.php', $database, $this->dir, $list],
+            [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes,
+        );
+        $this->assertIsResource($process);
+        $output = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
+        $exit = proc_close($process);
+        @unlink($list);
+        @unlink($database);
+
+        $this->assertSame(0, $exit, $output);
+    }
+
     public function test_a_failing_pull_keeps_the_import_outcome(): void
     {
         $real = new PdoCentralStore(Env::pdo('sqlite'));

@@ -251,8 +251,11 @@ final class PdoCentralStore implements CentralStore
         }
         return $this->transaction(function () use ($source, $wanted, $at): bool {
             $current = [];
-            foreach ($this->rows("SELECT cidr FROM {$this->prefix}list_entry WHERE source = ?", [$source]) as $row) {
-                $current[(string) $row['cidr']] = true;
+            // Row by row: a source of 200 000 entries must not also sit in memory as fetched rows
+            $statement = $this->pdo->prepare("SELECT cidr FROM {$this->prefix}list_entry WHERE source = ?");
+            $statement->execute([$source]);
+            while (($cidr = $statement->fetchColumn()) !== false) {
+                $current[(string) $cidr] = true;
             }
             $removed = array_keys(array_diff_key($current, $wanted));
             $added = array_keys(array_diff_key($wanted, $current));
