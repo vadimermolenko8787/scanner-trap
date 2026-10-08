@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ScannerTrap;
 
 use ScannerTrap\Exception\RefusedException;
+use ScannerTrap\Exception\StoreException;
 
 /** bin/scanner-trap: parses arguments, calls TrapManager, prints results. No console framework. */
 final class Cli
@@ -20,6 +21,8 @@ final class Cli
         'list' => [0, ['active', 'ip']],
         'block' => [1, ['reason', 'ttl']],
         'unblock' => [1, []],
+        'import' => [0, ['source']],
+        'lists' => [0, []],
         'pattern:list' => [0, []],
         'pattern:add' => [1, []],
         'pattern:remove' => [1, []],
@@ -33,8 +36,10 @@ final class Cli
           install                                   create tables or write the config's lists
           sync [--watch=N]                          push events, pull lists; keep pushing for N seconds
           list [--active] [--ip=IP]                 blocks with reason, server, expiry
-          block <ip> [--reason=TEXT] [--ttl=SECONDS]   manual block (0 = forever)
-          unblock <ip>
+          block <ip or cidr> [--reason=TEXT] [--ttl=SECONDS]   manual block (0 = forever)
+          unblock <ip or cidr>
+          import [--source=NAME]                    fetch the configured lists (all, or one)
+          lists                                     list sources: entries, last import
           pattern:list | pattern:add <p> | pattern:remove <p>
           allow:list | allow:add <entry> [--comment=TEXT] [--ttl=SECONDS] | allow:remove <entry>
 
@@ -116,6 +121,25 @@ final class Cli
                 break;
             case 'unblock':
                 $this->say($manager->unblock($positional[0], $by) > 0 ? 'Unblocked.' : 'That address was not blocked.');
+                break;
+            case 'import':
+                $failed = 0;
+                foreach ($manager->import($text('source') !== '' ? $text('source') : null) as $name => $result) {
+                    if ($result['error'] !== null) {
+                        $failed++;
+                        $this->say("{$name}\tFAILED\t{$result['error']}");
+                        continue;
+                    }
+                    $this->say(sprintf("%s\t%d networks\tskipped %d invalid, %d reserved, %d too wide", $name, $result['networks'], $result['invalid'], $result['reserved'], $result['tooWide']));
+                }
+                if ($failed > 0) {
+                    throw new StoreException("{$failed} list source(s) failed; their previous entries stay");
+                }
+                break;
+            case 'lists':
+                foreach ($manager->lists() as $name => $list) {
+                    $this->say(implode("\t", [$name, (string) $list['count'], $list['at'] > 0 ? date('Y-m-d H:i:s', $list['at']) : 'never', $list['configured'] ? 'configured' : 'not configured']));
+                }
                 break;
             case 'pattern:list':
                 foreach ($manager->patterns() as $pattern) {

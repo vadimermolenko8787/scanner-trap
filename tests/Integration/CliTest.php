@@ -162,6 +162,46 @@ final class CliTest extends TestCase
         $this->assertStringStartsWith($user . '@', (string) $statement->fetchColumn());
     }
 
+    public function test_import_and_lists(): void
+    {
+        $fixtures = __DIR__ . '/../fixtures/lists';
+        $this->writeConfig(['lists' => [['name' => 'own', 'file' => $fixtures . '/own.txt'], ['name' => 'firehol', 'file' => $fixtures . '/firehol-sample.netset']]]);
+
+        [$code, $out] = $this->cli('import');
+        $this->assertSame(0, $code, $out);
+        $this->assertStringContainsString("own\t1 networks", $out);
+        $this->assertStringContainsString('2 reserved', $out);
+
+        [, $lists] = $this->cli('lists');
+        $this->assertMatchesRegularExpression("/^firehol\t3\t\\d{4}-\\d{2}-\\d{2} [\\d:]{8}\tconfigured$/m", $lists);
+        $this->assertSame(0, $this->cli('import', '--source=own')[0]);
+        $this->assertSame(2, $this->cli('import', '--source=nope')[0]);
+    }
+
+    public function test_a_failing_source_exits_with_3_after_importing_the_others(): void
+    {
+        $fixtures = __DIR__ . '/../fixtures/lists';
+        $this->writeConfig(['lists' => [['name' => 'gone', 'file' => $fixtures . '/missing.txt'], ['name' => 'own', 'file' => $fixtures . '/own.txt']]]);
+
+        [$code, $out, $err] = $this->cli('import');
+
+        $this->assertSame(3, $code);
+        $this->assertStringContainsString('gone', $out . $err);
+        $this->assertMatchesRegularExpression("/^own\t1\t/m", $this->cli('lists')[1]);
+    }
+
+    public function test_networks_are_blocked_and_unblocked_and_browser_signatures_refused(): void
+    {
+        $this->writeConfig();
+
+        $this->assertSame(0, $this->cli('block', '45.155.205.0/24', '--reason=rotation')[0]);
+        $this->assertStringContainsString('45.155.205.0/24', $this->cli('list', '--ip=45.155.205.9')[1]);
+        $this->assertSame(0, $this->cli('unblock', '45.155.205.0/24')[0]);
+        $this->assertSame(2, $this->cli('block', '10.0.0.0/8')[0]);
+        $this->assertSame(0, $this->cli('pattern:add', '@gobuster')[0]);
+        $this->assertSame(2, $this->cli('pattern:add', '@mozilla')[0]);
+    }
+
     public function test_an_unreachable_store_exits_with_3(): void
     {
         $this->writeConfig(['local' => ['type' => 'redis', 'host' => '127.0.0.1', 'port' => 1]]);
