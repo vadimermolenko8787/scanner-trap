@@ -12,6 +12,7 @@ use ScannerTrap\Exception\StoreException;
 use ScannerTrap\Guard;
 use ScannerTrap\RequestContext;
 use ScannerTrap\Store\FileLocalStore;
+use ScannerTrap\Store\LocalStore;
 use ScannerTrap\Sync;
 use ScannerTrap\Tests\Support\Env;
 
@@ -55,6 +56,18 @@ final class SyncTest extends TestCase
         $this->assertSame(450, (new Sync($this->a, $this->central))->push());
         $this->assertSame([], $this->a->events(10));
         $this->assertCount(450, $this->central->blocks(true, null, 1000));
+    }
+
+    public function test_push_throws_when_acking_makes_no_progress(): void
+    {
+        $block = new Block('198.51.100.1', time(), 0);
+        $local = $this->createMock(LocalStore::class);
+        $local->method('marker')->willReturn(null);
+        $local->method('events')->willReturn(['same-id' => $block]);
+        $local->expects($this->once())->method('ackEvents');
+
+        $this->expectException(StoreException::class);
+        (new Sync($local, $this->central))->push();
     }
 
     public function test_a_failed_insert_leaves_the_events_for_the_next_run(): void

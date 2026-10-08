@@ -31,9 +31,14 @@ final class Sync
     {
         $this->assertOwner();
         $pushed = 0;
+        $previous = null;
         while (($events = $this->local->events(self::BATCH)) !== []) {
+            if (array_keys($events) === $previous) {
+                throw new StoreException('The local store did not drop the events it shipped; nothing more was pushed');
+            }
+            $previous = array_keys($events);
             $this->central->insertBlocks(array_values($events));
-            $this->local->ackEvents(array_map('strval', array_keys($events)));
+            $this->local->ackEvents(array_map('strval', $previous));
             $pushed += count($events);
         }
         if ($pushed > 0) {

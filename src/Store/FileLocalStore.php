@@ -97,15 +97,18 @@ final class FileLocalStore implements LocalStore
     public function events(int $limit): array
     {
         $events = [];
+        $garbage = false;
         foreach ($this->eventLines() as $line) {
-            if (count($events) >= $limit) {
-                break;
-            }
             $data = json_decode($line, true);
             $block = is_array($data) ? Block::fromArray($data) : null;
-            if ($block !== null) {
+            if ($block === null) {
+                $garbage = true;
+            } elseif (count($events) < $limit) {
                 $events[sha1($line)] = $block;
             }
+        }
+        if ($garbage) {
+            $this->ackEvents([]);
         }
         return $events;
     }
@@ -116,10 +119,12 @@ final class FileLocalStore implements LocalStore
         $file = $this->dir . '/' . self::EVENTS;
         $handle = @fopen($file, 'c+');
         if ($handle === false) {
-            return;
+            throw new StoreException("Cannot open {$file}");
         }
         try {
-            flock($handle, LOCK_EX);
+            if (!flock($handle, LOCK_EX)) {
+                throw new StoreException("Cannot lock {$file}");
+            }
             $acked = array_count_values($ids);
             $kept = [];
             foreach (explode("\n", (string) stream_get_contents($handle)) as $line) {

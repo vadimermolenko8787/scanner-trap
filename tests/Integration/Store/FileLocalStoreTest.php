@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ScannerTrap\Tests\Integration\Store;
 
 use ScannerTrap\Block;
+use ScannerTrap\Exception\StoreException;
 use ScannerTrap\Store\FileLocalStore;
 use ScannerTrap\Store\LocalStore;
 
@@ -25,6 +26,25 @@ final class FileLocalStoreTest extends LocalStoreContract
     protected function createStore(): LocalStore
     {
         return new FileLocalStore($this->dir);
+    }
+
+    public function test_a_log_of_garbage_gives_no_events_and_nothing_to_wait_for(): void
+    {
+        $store = $this->createStore();
+        $store->addBlock(new Block('203.0.113.7', time(), 0), false);
+        file_put_contents($this->dir . '/events.log', "not json\n{\"a\":1}\n");
+
+        $this->assertSame([], $store->events(10));
+        $this->assertFalse($store->waitForEvents(0));
+    }
+
+    public function test_acking_throws_when_the_log_cannot_be_opened(): void
+    {
+        $store = $this->createStore();
+        mkdir($this->dir . '/events.log', 0775, true);
+
+        $this->expectException(StoreException::class);
+        $store->ackEvents(['x']);
     }
 
     public function test_the_layout_is_the_specs(): void
