@@ -8,6 +8,8 @@ It stops reconnaissance, not floods: leave rate limiting to the web server or a 
 PHP 8.1 to 8.4, no framework needed. Any failure inside the package lets the request through, and a deprecation or
 warning raised inside the check never reaches the response.
 
+Design: [docs/architecture.md](docs/architecture.md) explains the decisions behind the package and its data layout.
+
 ## Quick start: one server, files
 
     composer require vadimermolenko8787/scanner-trap

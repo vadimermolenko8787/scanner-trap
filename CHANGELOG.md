@@ -18,6 +18,7 @@ All notable changes to this project are documented here. The project follows [Se
 * Sync pulls only the blocks and lifts made since the previous run, with a full reconciliation once an hour.
 * Redis scripts run by their hash (`EVALSHA`); `'persistent' => true` keeps the Redis connection across requests.
 * `TrustedProxies::CLOUDFLARE` lists Cloudflare's ranges for `trustedProxies`, for sites behind Cloudflare.
+* `docs/architecture.md`: the design decisions and the data layout.
 
 ### Changed
 * The six SQL fragments that search text can contain (`' or '`, `' and '`, `" or "`, `" and "`, `sleep(`, `benchmark(`) moved from `DefaultPatterns::LIST` to `DefaultPatterns::LOOSE_FRAGMENTS`. A stored pattern list keeps them until `scanner-trap pattern:remove`.

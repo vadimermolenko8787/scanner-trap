@@ -103,7 +103,6 @@ final class ScannerTrap
     /**
      * Runs $work with PHP warnings turned into exceptions; any Throwable is logged and gives $fallback.
      *
-     * @internal
      * @param \Closure(): mixed $work
      */
     public static function failSafe(\Closure $work, mixed $fallback, ?LoggerInterface $logger): mixed
