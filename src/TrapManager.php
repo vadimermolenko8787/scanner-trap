@@ -234,7 +234,7 @@ final class TrapManager
         $this->local->replaceLists($this->localPatterns(), $kept);
     }
 
-    /** @return array<string, array{networks: int, invalid: int, reserved: int, tooWide: int, error: ?string}> */
+    /** @return array<string, array{networks: int, previous: int, invalid: int, reserved: int, tooWide: int, error: ?string}> */
     public function import(?string $source = null): array
     {
         $this->assertManageable();
@@ -242,14 +242,16 @@ final class TrapManager
         if ($sources === []) {
             throw new RefusedException($source === null ? 'No list sources are configured (the lists key)' : "No list source {$source} in the config");
         }
+        $before = $this->storedListStatus();
         $report = [];
         foreach ($sources as $list) {
+            $previous = $before[$list->name]['count'] ?? 0;
             try {
                 $result = $this->importer->import($list);
                 $this->replaceList($list->name, $result['networks']);
-                $report[$list->name] = ['networks' => count($result['networks']), 'invalid' => $result['invalid'], 'reserved' => $result['reserved'], 'tooWide' => $result['tooWide'], 'error' => null];
+                $report[$list->name] = ['networks' => count($result['networks']), 'previous' => $previous, 'invalid' => $result['invalid'], 'reserved' => $result['reserved'], 'tooWide' => $result['tooWide'], 'error' => null];
             } catch (StoreException|RefusedException $e) {
-                $report[$list->name] = ['networks' => 0, 'invalid' => 0, 'reserved' => 0, 'tooWide' => 0, 'error' => $e->getMessage()];
+                $report[$list->name] = ['networks' => 0, 'previous' => $previous, 'invalid' => 0, 'reserved' => 0, 'tooWide' => 0, 'error' => $e->getMessage()];
             }
         }
         try {

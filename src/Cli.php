@@ -123,6 +123,9 @@ final class Cli
                 $this->say($manager->unblock($positional[0], $by) > 0 ? 'Unblocked.' : 'That address was not blocked.');
                 break;
             case 'import':
+                if (isset($options['source']) && $text('source') === '') {
+                    throw new \InvalidArgumentException('--source needs a list source name.');
+                }
                 $failed = 0;
                 foreach ($manager->import($text('source') !== '' ? $text('source') : null) as $name => $result) {
                     if ($result['error'] !== null) {
@@ -130,7 +133,7 @@ final class Cli
                         $this->say("{$name}\tFAILED\t{$result['error']}");
                         continue;
                     }
-                    $this->say(sprintf("%s\t%d networks\tskipped %d invalid, %d reserved, %d too wide", $name, $result['networks'], $result['invalid'], $result['reserved'], $result['tooWide']));
+                    $this->say(sprintf("%s\t%d networks (was %d)\tskipped %d invalid, %d reserved, %d too wide", $name, $result['networks'], $result['previous'], $result['invalid'], $result['reserved'], $result['tooWide']));
                 }
                 if ($failed > 0) {
                     throw new StoreException("{$failed} list source(s) failed; their previous entries stay");

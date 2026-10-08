@@ -169,13 +169,15 @@ final class CliTest extends TestCase
 
         [$code, $out] = $this->cli('import');
         $this->assertSame(0, $code, $out);
-        $this->assertStringContainsString("own\t1 networks", $out);
+        $this->assertStringContainsString("own\t1 networks (was 0)", $out);
         $this->assertStringContainsString('2 reserved', $out);
 
         [, $lists] = $this->cli('lists');
         $this->assertMatchesRegularExpression("/^firehol\t3\t\\d{4}-\\d{2}-\\d{2} [\\d:]{8}\tconfigured$/m", $lists);
         $this->assertSame(0, $this->cli('import', '--source=own')[0]);
         $this->assertSame(2, $this->cli('import', '--source=nope')[0]);
+        $this->assertSame(1, $this->cli('import', '--source=')[0]);
+        $this->assertSame(1, $this->cli('import', '--source')[0]);
     }
 
     public function test_a_failing_source_exits_with_3_after_importing_the_others(): void
@@ -183,10 +185,10 @@ final class CliTest extends TestCase
         $fixtures = __DIR__ . '/../fixtures/lists';
         $this->writeConfig(['lists' => [['name' => 'gone', 'file' => $fixtures . '/missing.txt'], ['name' => 'own', 'file' => $fixtures . '/own.txt']]]);
 
-        [$code, $out, $err] = $this->cli('import');
+        [$code, $out] = $this->cli('import');
 
         $this->assertSame(3, $code);
-        $this->assertStringContainsString('gone', $out . $err);
+        $this->assertStringContainsString("gone\tFAILED", $out);
         $this->assertMatchesRegularExpression("/^own\t1\t/m", $this->cli('lists')[1]);
     }
 

@@ -313,9 +313,10 @@ final class TrapManagerTest extends TestCase
 
         $report = $manager->import();
 
-        $this->assertSame(['networks' => 1, 'invalid' => 0, 'reserved' => 0, 'tooWide' => 0, 'error' => null], $report['own']);
+        $this->assertSame(['networks' => 1, 'previous' => 0, 'invalid' => 0, 'reserved' => 0, 'tooWide' => 0, 'error' => null], $report['own']);
         $this->assertSame(3, $report['firehol']['networks']);
         $this->assertNotNull($report['gone']['error']);
+        $this->assertSame(1, $manager->import('own')['own']['previous']);
         $this->assertSame('own', $this->local->read('185.220.101.9')->listed);
         $this->assertSame('firehol', $this->local->read('91.92.249.1')->listed);
         $lists = $manager->lists();
