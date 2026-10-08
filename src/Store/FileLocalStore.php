@@ -316,6 +316,41 @@ final class FileLocalStore implements LocalStore
         }
     }
 
+    public function prune(int $before): int
+    {
+        $removed = 0;
+        foreach (glob($this->dir . '/' . self::BLOCKS . '/*') ?: [] as $file) {
+            if ($this->isExpired($file) && $this->removeIfExpired($file) && !is_file($file)) {
+                $removed++;
+            }
+        }
+        foreach (glob($this->dir . '/' . self::SEEN . '/*') ?: [] as $file) {
+            if ((int) @filemtime($file) < $before && @unlink($file)) {
+                $removed++;
+            }
+        }
+        // After the blocks, so the lock files their removal leaves are swept too
+        foreach (glob($this->dir . '/' . self::LOCKS . '/*') ?: [] as $lock) {
+            $block = $this->dir . '/' . self::BLOCKS . '/' . basename($lock);
+            if (is_file($block)) {
+                continue;
+            }
+            $handle = @fopen($lock, 'c');
+            if ($handle === false) {
+                continue;
+            }
+            try {
+                if (flock($handle, LOCK_EX | LOCK_NB) && !is_file($block) && @unlink($lock)) {
+                    $removed++;
+                }
+            } finally {
+                flock($handle, LOCK_UN);
+                fclose($handle);
+            }
+        }
+        return $removed;
+    }
+
     public function marker(): ?array
     {
         $data = json_decode((string) @file_get_contents($this->dir . '/' . self::OWNER), true);

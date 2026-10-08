@@ -45,4 +45,11 @@ final class ApcuLocalStoreTest extends LocalStoreContract
     {
         return false;
     }
+
+    public function test_prune_has_nothing_to_do_because_ttls_expire_everything(): void
+    {
+        $store = $this->createStore();
+        $store->addBlock(new Block('203.0.113.7', time(), time() + 600), false);
+        $this->assertSame(0, $store->prune(time()));
+    }
 }

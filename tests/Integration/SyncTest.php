@@ -334,6 +334,11 @@ final class SyncTest extends TestCase
                 return $this->inner->lift($ip, $by);
             }
 
+            public function prune(int $before): int
+            {
+                return $this->inner->prune($before);
+            }
+
             public function patterns(): array
             {
                 return $this->inner->patterns();

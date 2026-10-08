@@ -165,6 +165,14 @@ final class PdoCentralStore implements CentralStore
         ));
     }
 
+    public function prune(int $before): int
+    {
+        return $this->guarded(fn (): int => $this->execute(
+            "DELETE FROM {$this->prefix}block WHERE lifted_at < ? OR (lifted_at IS NULL AND expires_at IS NOT NULL AND expires_at < ?)",
+            [$before, $before],
+        ));
+    }
+
     public function patterns(): array
     {
         return $this->guarded(function (): array {

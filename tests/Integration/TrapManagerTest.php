@@ -15,6 +15,7 @@ use ScannerTrap\Exception\StoreException;
 use ScannerTrap\Guard;
 use ScannerTrap\ListSource;
 use ScannerTrap\RequestContext;
+use ScannerTrap\SubnetPolicy;
 use ScannerTrap\Store\ApcuLocalStore;
 use ScannerTrap\Store\FileLocalStore;
 use ScannerTrap\TrapManager;
@@ -466,5 +467,53 @@ final class TrapManagerTest extends TestCase
             $this->assertStringContainsString('own', $e->getMessage());
             $this->assertStringContainsString('next sync', $e->getMessage());
         }
+    }
+
+    private function pruner(bool $central): TrapManager
+    {
+        if ($central && $this->central === null) {
+            $this->central = new PdoCentralStore(Env::pdo('sqlite'));
+        }
+        return new TrapManager($this->local, $central ? $this->central : null, self::CONFIG_PATTERNS, self::CONFIG_ALLOW, ['/admin'], 'web1', 600, null, SubnetPolicy::fromConfig(null));
+    }
+
+    #[DataProvider('modes')]
+    public function test_prune_reports_central_rows_and_local_files(bool $central): void
+    {
+        $pdo = Env::pdo('sqlite');
+        if ($central) {
+            $this->central = new PdoCentralStore($pdo);
+        }
+        $manager = $this->pruner($central);
+        $manager->install('ops');
+        $this->local->addBlock(new Block('203.0.113.7', time() - 10, time() - 5), false);
+        if ($central) {
+            $this->central?->insertBlocks([new Block('45.155.205.1', time(), 0), new Block('45.155.205.2', time(), 0)]);
+            $this->central?->lift('45.155.205.1', 'ops');
+            $this->central?->lift('45.155.205.2', 'ops');
+            $pdo->exec('UPDATE scanner_trap_block SET lifted_at = ' . (time() - TrapManager::PRUNE_KEEP - 10) . " WHERE ip = '45.155.205.1'");
+        }
+
+        $result = $manager->prune();
+
+        $this->assertSame($central ? 1 : 0, $result['central']);
+        $this->assertGreaterThanOrEqual(1, $result['local']);
+    }
+
+    public function test_a_keep_below_the_subnet_window_is_refused(): void
+    {
+        $manager = $this->pruner(false);
+        $this->expectException(RefusedException::class);
+        $this->expectExceptionMessage('86400');
+        $manager->prune(3600);
+    }
+
+    public function test_an_apcu_store_without_a_central_store_cannot_prune(): void
+    {
+        $manager = new TrapManager(new ApcuLocalStore(), null, self::CONFIG_PATTERNS, [], [], 'web1', 600);
+
+        $this->expectException(RefusedException::class);
+        $this->expectExceptionMessage('APCu');
+        $manager->prune();
     }
 }

@@ -18,6 +18,8 @@ use ScannerTrap\Store\LocalStore;
  */
 final class TrapManager
 {
+    public const PRUNE_KEEP = 2_592_000;
+
     /**
      * @param list<string> $configPatterns
      * @param list<string> $configAllow
@@ -279,6 +281,23 @@ final class TrapManager
                 . ($this->central !== null ? '. The central store was written; the next sync applies it' : ''), 0, $e);
         }
         return $report;
+    }
+
+    /**
+     * Drops history older than $keep seconds: central rows lifted or expired before then, and the file store's leftovers.
+     * The keep may not be shorter than the subnet window: central escalation reads a network's latest lift from the history.
+     *
+     * @return array{central: int, local: int}
+     */
+    public function prune(?int $keep = null): array
+    {
+        $this->assertManageable();
+        $keep ??= self::PRUNE_KEEP;
+        if ($this->subnets !== null && $keep < $this->subnets->window()) {
+            throw new RefusedException("--keep must be at least the subnet window, {$this->subnets->window()} seconds");
+        }
+        $before = time() - $keep;
+        return ['central' => $this->central?->prune($before) ?? 0, 'local' => $this->local->prune($before)];
     }
 
     /** @return array<string, array{count: int, at: int, configured: bool}> */

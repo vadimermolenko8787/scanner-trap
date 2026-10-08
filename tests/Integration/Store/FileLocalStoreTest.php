@@ -209,4 +209,28 @@ final class FileLocalStoreTest extends LocalStoreContract
         $this->assertFileDoesNotExist($stale);
         $this->assertFileExists($second);
     }
+
+    public function test_prune_removes_expired_block_files_stale_counters_and_orphan_locks(): void
+    {
+        $store = $this->createStore();
+        $store->addBlock(new Block('203.0.113.7', time() - 10, time() - 5), false);   // expired file on disk
+        $store->addBlock(new Block('203.0.113.8', time(), 0), false);                 // live
+        mkdir($this->dir . '/seen', 0775, true);
+        file_put_contents($this->dir . '/seen/stale', '{}');
+        touch($this->dir . '/seen/stale', time() - 7200);
+        file_put_contents($this->dir . '/seen/fresh', '{}');
+        mkdir($this->dir . '/locks', 0775, true);
+        file_put_contents($this->dir . '/locks/' . sha1('203.0.113.99'), '');         // orphan
+        file_put_contents($this->dir . '/locks/' . sha1('203.0.113.8'), '');          // its block is live
+
+        // the expired block file, the lock file its removal leaves, the stale counter, the orphan lock
+        $this->assertSame(4, $store->prune(time() - 3600));
+
+        $this->assertFileDoesNotExist($this->dir . '/blocks/' . sha1('203.0.113.7'));
+        $this->assertFileExists($this->dir . '/blocks/' . sha1('203.0.113.8'));
+        $this->assertFileDoesNotExist($this->dir . '/seen/stale');
+        $this->assertFileExists($this->dir . '/seen/fresh');
+        $this->assertFileDoesNotExist($this->dir . '/locks/' . sha1('203.0.113.99'));
+        $this->assertFileExists($this->dir . '/locks/' . sha1('203.0.113.8'));
+    }
 }

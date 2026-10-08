@@ -322,4 +322,28 @@ abstract class PdoCentralStoreContract extends TestCase
 
         $this->assertTrue($store->replaceList('own', ['45.155.205.0/24'], 1000));
     }
+
+    public function test_prune_drops_old_lifted_and_old_expired_rows_and_keeps_the_rest(): void
+    {
+        $store = $this->installed();
+        $old = time() - 10_000;
+        $store->insertBlocks([
+            new Block('45.155.205.1', $old, $old + 100),        // expired long ago: goes
+            new Block('45.155.205.2', $old, 0),                 // lifted long ago: goes
+            new Block('45.155.205.3', $old, 0),                 // lifted recently: stays
+            new Block('45.155.205.4', $old, time() + 600),      // active: stays
+            new Block('45.155.205.5', $old, 0),                 // active forever: stays
+            new Block('45.155.205.6', time() - 100, time() - 10), // expired recently: stays
+            new Block('45.155.205.7', $old, $old + 100),        // expired long ago, lifted recently: stays
+        ]);
+        $store->lift('45.155.205.2', 'ops');
+        $this->pdo->exec("UPDATE scanner_trap_block SET lifted_at = {$old} WHERE ip = '45.155.205.2'");
+        $store->lift('45.155.205.3', 'ops');
+        $store->lift('45.155.205.7', 'ops');
+
+        $this->assertSame(2, $store->prune(time() - 1000));
+        $left = array_map(static fn (Block $b): string => $b->ip, $store->blocks(false));
+        sort($left);
+        $this->assertSame(['45.155.205.3', '45.155.205.4', '45.155.205.5', '45.155.205.6', '45.155.205.7'], $left);
+    }
 }

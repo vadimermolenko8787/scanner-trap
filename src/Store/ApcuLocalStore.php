@@ -187,6 +187,12 @@ final class ApcuLocalStore implements LocalStore
         return $result;
     }
 
+    /** TTLs expire everything. */
+    public function prune(int $before): int
+    {
+        return 0;
+    }
+
     public function marker(): ?array
     {
         $value = apcu_fetch($this->key('owner'));

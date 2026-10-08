@@ -224,4 +224,17 @@ final class CliTest extends TestCase
         $this->assertSame(3, $code);
         $this->assertStringContainsString('Redis', $err);
     }
+
+    public function test_prune_prints_what_it_removed(): void
+    {
+        $this->writeConfig();
+        $this->cli('install');
+
+        [$code, $out] = $this->cli('prune', '--keep=86400');
+
+        $this->assertSame(0, $code);
+        $this->assertSame("Pruned 0 central rows and 0 local files.\n", $out);
+        $this->assertSame(2, $this->cli('prune', '--keep=60')[0]);
+        $this->assertSame(1, $this->cli('prune', '--keep=soon')[0]);
+    }
 }

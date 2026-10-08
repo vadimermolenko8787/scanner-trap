@@ -92,9 +92,12 @@ with its own worker can call `ScannerTrap::fromConfig($config)->manager()->sync(
 | `block <ip or cidr> [--reason=…] [--ttl=…]` | manual block; `--ttl=0` is forever; refused for a whitelisted IP, or a network that is reserved or overlaps the whitelist |
 | `unblock <ip or cidr>` | lift the block everywhere (a network's escalation count starts afresh); an address still inside a blocked network is reported as such |
 | `import [--source=…]` | fetch the configured blocklists (all, or one) |
+| `prune [--keep=…]` | drop lifted and expired blocks older than the keep (30 days) from the central database, and expired files from the file store |
 | `lists` | each list source with its size and last import |
 | `pattern:list`, `pattern:add <p>`, `pattern:remove <p>` | decoy patterns, validated |
 | `allow:list`, `allow:add <entry> [--comment=…] [--ttl=…]`, `allow:remove <entry>` | whitelist |
+
+`list` without `--active` shows the history back to the keep.
 
 Exit codes: 0 success, 1 usage error, 2 refused, 3 store unreachable.
 
@@ -169,6 +172,11 @@ web server's APCu. Run the import daily from cron; with a central database on on
 lists on their next sync:
 
     17 4 * * * cd /var/www/app && sudo -u www-data vendor/bin/scanner-trap import
+    23 3 * * * cd /var/www/app && sudo -u www-data vendor/bin/scanner-trap prune
+
+`prune` drops central history older than 30 days (`--keep=SECONDS`, at least the subnet window) and, from the file
+store, expired block files and orphan locks at any age and `seen/` counters older than the keep; with file stores, run
+it on every server.
 
 ## Web server routing
 

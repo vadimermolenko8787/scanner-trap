@@ -61,6 +61,9 @@ interface LocalStore
     /** @return array<string, array{count: int, at: int}> every source with entries: their number and the import time */
     public function listStatus(): array;
 
+    /** Removes what expiry left behind before $before (file store); returns how many files. Stores with TTLs return 0. */
+    public function prune(int $before): int;
+
     /** @return array{owner: string, version: int, listsVersion: int}|null the central store this one follows, the patterns' version and the lists' version (-1: stored before it existed) */
     public function marker(): ?array;
 

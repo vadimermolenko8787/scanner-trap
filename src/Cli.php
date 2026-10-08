@@ -23,6 +23,7 @@ final class Cli
         'unblock' => [1, []],
         'import' => [0, ['source']],
         'lists' => [0, []],
+        'prune' => [0, ['keep']],
         'pattern:list' => [0, []],
         'pattern:add' => [1, []],
         'pattern:remove' => [1, []],
@@ -40,6 +41,7 @@ final class Cli
           unblock <ip or cidr>
           import [--source=NAME]                    fetch the configured lists (all, or one)
           lists                                     list sources: entries, last import
+          prune [--keep=SECONDS]                    drop history and leftovers older than SECONDS (default 30 days)
           pattern:list | pattern:add <p> | pattern:remove <p>
           allow:list | allow:add <entry> [--comment=TEXT] [--ttl=SECONDS] | allow:remove <entry>
 
@@ -148,6 +150,10 @@ final class Cli
                 foreach ($manager->lists() as $name => $list) {
                     $this->say(implode("\t", [$name, (string) $list['count'], $list['at'] > 0 ? date('Y-m-d H:i:s', $list['at']) : 'never', $list['configured'] ? 'configured' : 'not configured']));
                 }
+                break;
+            case 'prune':
+                $result = $manager->prune($this->intOption($options, 'keep'));
+                $this->say("Pruned {$result['central']} central rows and {$result['local']} local files.");
                 break;
             case 'pattern:list':
                 foreach ($manager->patterns() as $pattern) {

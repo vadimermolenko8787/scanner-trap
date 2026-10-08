@@ -394,4 +394,18 @@ abstract class LocalStoreContract extends TestCase
             }
         }
     }
+
+    public function test_prune_keeps_live_blocks(): void
+    {
+        $store = $this->createStore();
+        $store->addBlock(new Block('203.0.113.7', time(), time() + 600), false);
+        $store->addBlock(new Block('203.0.113.8', time(), 0), false);
+        $store->addBlock(new Block('45.155.205.0/24', time(), 0, source: 'manual'), false);
+
+        $store->prune(time() + 3600);
+
+        $this->assertTrue($store->read('203.0.113.7')->blocked);
+        $this->assertTrue($store->read('203.0.113.8')->blocked);
+        $this->assertTrue($store->read('45.155.205.9')->blocked);
+    }
 }

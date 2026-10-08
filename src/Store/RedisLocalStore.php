@@ -276,6 +276,12 @@ final class RedisLocalStore implements LocalStore
         return $reply !== null && $reply !== [];
     }
 
+    /** TTLs expire everything. */
+    public function prune(int $before): int
+    {
+        return 0;
+    }
+
     public function marker(): ?array
     {
         $value = $this->redis->raw('GET', $this->key('owner'));

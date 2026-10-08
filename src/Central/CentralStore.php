@@ -60,6 +60,9 @@ interface CentralStore
      */
     public function replaceList(string $source, array $networks, int $at): bool;
 
+    /** Deletes rows lifted before $before, or not lifted and expired before it; active rows never. Returns how many. */
+    public function prune(int $before): int;
+
     /** @return list<string> the CIDRs of one source, sorted */
     public function listEntries(string $source): array;
 
