@@ -12,6 +12,7 @@ use ScannerTrap\Central\PdoCentralStore;
 use ScannerTrap\Exception\RefusedException;
 use ScannerTrap\Exception\StoreException;
 use ScannerTrap\Guard;
+use ScannerTrap\ListSource;
 use ScannerTrap\RequestContext;
 use ScannerTrap\Store\ApcuLocalStore;
 use ScannerTrap\Store\FileLocalStore;
@@ -38,12 +39,13 @@ final class TrapManagerTest extends TestCase
         exec('rm -rf ' . escapeshellarg($this->dir));
     }
 
-    private function manager(bool $central): TrapManager
+    /** @param list<array<string, string>> $lists */
+    private function manager(bool $central, array $lists = []): TrapManager
     {
         if ($central && $this->central === null) {
             $this->central = new PdoCentralStore(Env::pdo('sqlite'));
         }
-        return new TrapManager($this->local, $central ? $this->central : null, self::CONFIG_PATTERNS, self::CONFIG_ALLOW, ['/admin'], 'web1', 600);
+        return new TrapManager($this->local, $central ? $this->central : null, self::CONFIG_PATTERNS, self::CONFIG_ALLOW, ['/admin'], 'web1', 600, null, null, ListSource::fromConfig($lists));
     }
 
     private function installed(bool $central): TrapManager
@@ -257,5 +259,103 @@ final class TrapManagerTest extends TestCase
         $this->expectException(RefusedException::class);
         $this->expectExceptionMessage('APCu');
         $manager->block('203.0.113.7', '', null, 'ops');
+    }
+
+    #[DataProvider('modes')]
+    public function test_a_network_is_blocked_listed_and_unblocked(bool $central): void
+    {
+        $manager = $this->installed($central);
+
+        $this->assertSame('45.155.205.0/24', $manager->block('45.155.205.77/24', 'abuse', null, 'ops')->ip);
+        $this->assertTrue($this->local->read('45.155.205.1')->blocked);
+        $this->assertSame(['45.155.205.0/24'], array_map(static fn (Block $b): string => $b->ip, $manager->blocks(true, '45.155.205.9')));
+
+        $this->assertSame(0, $manager->unblock('45.155.205.9', 'ops'), 'only the network covers that address');
+        $this->assertTrue($this->local->read('45.155.205.9')->blocked);
+        $this->assertSame(1, $manager->unblock('45.155.205.0/24', 'ops'));
+        $this->assertFalse($this->local->read('45.155.205.9')->blocked);
+    }
+
+    /** @return array<string, array{bool, string, string}> */
+    public static function refusedNetworks(): array
+    {
+        $cases = [];
+        foreach (self::modes() as $mode => [$central]) {
+            $cases["{$mode}: reserved"] = [$central, '10.20.0.0/16', 'reserved'];
+            $cases["{$mode}: covers the whitelist"] = [$central, '45.155.205.0/24', 'whitelist'];
+            $cases["{$mode}: garbage"] = [$central, '45.155.205.0/40', 'not an IP address or a network'];
+        }
+        return $cases;
+    }
+
+    #[DataProvider('refusedNetworks')]
+    public function test_a_network_block_is_refused(bool $central, string $target, string $message): void
+    {
+        $manager = $this->installed($central);
+        $manager->addAllow('45.155.205.9', '', null, 'ops');
+
+        $this->expectException(RefusedException::class);
+        $this->expectExceptionMessage($message);
+        $manager->block($target, '', null, 'ops');
+    }
+
+    #[DataProvider('modes')]
+    public function test_import_lists_and_report(bool $central): void
+    {
+        $fixtures = __DIR__ . '/../fixtures/lists';
+        $manager = $this->manager($central, [
+            ['name' => 'own', 'file' => $fixtures . '/own.txt'],
+            ['name' => 'firehol', 'file' => $fixtures . '/firehol-sample.netset'],
+            ['name' => 'gone', 'file' => $fixtures . '/missing.txt'],
+        ]);
+        $manager->install('ops');
+
+        $report = $manager->import();
+
+        $this->assertSame(['networks' => 1, 'invalid' => 0, 'reserved' => 0, 'tooWide' => 0, 'error' => null], $report['own']);
+        $this->assertSame(3, $report['firehol']['networks']);
+        $this->assertNotNull($report['gone']['error']);
+        $this->assertSame('own', $this->local->read('185.220.101.9')->listed);
+        $this->assertSame('firehol', $this->local->read('91.92.249.1')->listed);
+        $lists = $manager->lists();
+        $this->assertSame([1, true], [$lists['own']['count'], $lists['own']['configured']]);
+        $this->assertSame([0, 0, true], [$lists['gone']['count'], $lists['gone']['at'], $lists['gone']['configured']]);
+    }
+
+    #[DataProvider('modes')]
+    public function test_a_full_import_drops_sources_no_longer_configured(bool $central): void
+    {
+        $fixtures = __DIR__ . '/../fixtures/lists';
+        $this->installed($central);
+        $this->manager($central, [['name' => 'old', 'file' => $fixtures . '/own.txt']])->import();
+        $this->assertSame('old', $this->local->read('185.220.101.9')->listed);
+
+        $this->manager($central, [['name' => 'own', 'file' => $fixtures . '/own.txt']])->import();
+
+        $this->assertSame('own', $this->local->read('185.220.101.9')->listed);
+        $this->assertSame(['own'], array_keys($this->manager($central)->lists()));
+    }
+
+    public function test_an_apcu_store_cannot_import_lists(): void
+    {
+        $manager = new TrapManager(new ApcuLocalStore(), null, self::CONFIG_PATTERNS, [], [], 'web1', 600, null, null, ListSource::fromConfig([['name' => 'own', 'file' => __DIR__ . '/../fixtures/lists/own.txt']]));
+
+        $this->expectException(RefusedException::class);
+        $this->expectExceptionMessage('APCu');
+        $manager->import();
+    }
+
+    public function test_an_unknown_source_and_no_sources_are_refused(): void
+    {
+        $manager = $this->manager(false, [['name' => 'own', 'file' => '/tmp/x']]);
+        try {
+            $manager->import('nope');
+            $this->fail('an unknown source must be refused');
+        } catch (RefusedException $e) {
+            $this->assertStringContainsString('nope', $e->getMessage());
+        }
+
+        $this->expectException(RefusedException::class);
+        $this->manager(false)->import();
     }
 }

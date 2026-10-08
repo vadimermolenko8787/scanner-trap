@@ -7,6 +7,7 @@ namespace ScannerTrap;
 use Psr\Log\LoggerInterface;
 use ScannerTrap\Central\CentralStore;
 use ScannerTrap\Exception\RefusedException;
+use ScannerTrap\Exception\StoreException;
 use ScannerTrap\Store\ApcuLocalStore;
 use ScannerTrap\Store\LocalStore;
 
@@ -21,6 +22,7 @@ final class TrapManager
      * @param list<string> $configPatterns
      * @param list<string> $configAllow
      * @param list<string> $ownPaths
+     * @param list<ListSource> $listSources
      */
     public function __construct(
         private readonly LocalStore $local,
@@ -32,6 +34,8 @@ final class TrapManager
         private readonly int $blockTtl = 604800,
         private readonly ?LoggerInterface $logger = null,
         private readonly ?SubnetPolicy $subnets = null,
+        private readonly array $listSources = [],
+        private readonly ListImporter $importer = new ListImporter(),
     ) {
     }
 
@@ -68,37 +72,50 @@ final class TrapManager
         return $this->syncer()->run($watchSeconds);
     }
 
-    /** @return list<Block> */
+    /** @return list<Block> with $ip: the exact block and every network block containing it */
     public function blocks(bool $activeOnly = true, ?string $ip = null): array
     {
         $this->assertManageable();
-        if ($this->central !== null) {
-            return $this->central->blocks($activeOnly, $ip);
+        $all = $this->central !== null ? $this->central->blocks($activeOnly, null, 1_000_000) : $this->local->blocks();
+        if ($ip === null) {
+            return $all;
         }
-        $ip = $ip === null ? null : (Rules::normalizeIp($ip) ?? $ip);
-        return array_values(array_filter($this->local->blocks(), static fn (Block $b): bool => $ip === null || $b->ip === $ip));
+        $target = self::target($ip) ?? $ip;
+        return array_values(array_filter($all, static fn (Block $b): bool => $b->ip === $target
+            || ($b->isNetwork() && !str_contains($target, '/') && Network::parse($b->ip)?->contains($target) === true)));
     }
 
     public function block(string $ip, string $reason, ?int $ttl, string $by): Block
     {
         $this->assertManageable();
-        $normalized = Rules::normalizeIp(trim($ip)) ?? throw new RefusedException("{$ip} is not an IP address");
-        if (Rules::isAllowed($normalized, array_map(static fn (AllowEntry $e): string => $e->entry, $this->allowEntries()))) {
-            throw new RefusedException("{$normalized} is on the whitelist, which wins over any block; remove the entry first");
+        $target = self::target($ip) ?? throw new RefusedException("{$ip} is not an IP address or a network");
+        $network = str_contains($target, '/') ? Network::parse($target) : null;
+        if ($network !== null && $network->isReserved()) {
+            throw new RefusedException("{$target} is a private or reserved network; block single addresses there");
+        }
+        foreach ($this->allowEntries() as $allow) {
+            $entry = $allow->entry;
+            $allowed = Network::parse($entry);
+            $covers = $network === null
+                ? Rules::isAllowed($target, [$entry])
+                : ($allowed !== null ? $network->overlaps($allowed) : Rules::isAllowed($network->address, [$entry]));
+            if ($covers) {
+                throw new RefusedException("{$target} covers the whitelist entry {$entry}, which wins over any block; remove the entry first");
+            }
         }
         $ttl ??= $this->blockTtl;
         $now = time();
-        $block = new Block($normalized, $now, $ttl > 0 ? $now + $ttl : 0, $this->serverName, '', '', trim($reason) !== '' ? trim($reason) : "manual by {$by}", '', Block::SOURCE_MANUAL);
+        $block = new Block($target, $now, $ttl > 0 ? $now + $ttl : 0, $this->serverName, '', '', trim($reason) !== '' ? trim($reason) : "manual by {$by}", '', Block::SOURCE_MANUAL);
         if ($this->central !== null) {
-            if ($this->central->blocks(true, $normalized) !== []) {
-                throw new RefusedException("{$normalized} is already blocked");
+            if ($this->central->blocks(true, $target) !== []) {
+                throw new RefusedException("{$target} is already blocked");
             }
             $this->central->insertBlocks([$block]);
             $this->syncer()->pull();
         } elseif (!$this->local->addBlock($block, false)) {
-            throw new RefusedException("{$normalized} is already blocked");
+            throw new RefusedException("{$target} is already blocked");
         }
-        $this->logger?->notice('Scanner trap: {ip} blocked by {by}', ['ip' => $normalized, 'by' => $by]);
+        $this->logger?->notice('Scanner trap: {ip} blocked by {by}', ['ip' => $target, 'by' => $by]);
         return $block;
     }
 
@@ -106,17 +123,17 @@ final class TrapManager
     public function unblock(string $ip, string $by): int
     {
         $this->assertManageable();
-        $normalized = Rules::normalizeIp(trim($ip)) ?? throw new RefusedException("{$ip} is not an IP address");
+        $target = self::target($ip) ?? throw new RefusedException("{$ip} is not an IP address or a network");
         if ($this->central !== null) {
             $sync = $this->syncer();
             $sync->push();
-            $lifted = $this->central->lift($normalized, $by);
-            $this->local->removeBlock($normalized);
+            $lifted = $this->central->lift($target, $by);
+            $this->local->removeBlock($target);
             $sync->pull();
             return $lifted;
         }
-        $known = $this->local->read($normalized)->blocked;
-        $this->local->removeBlock($normalized);
+        $known = in_array($target, array_map(static fn (Block $b): string => $b->ip, $this->local->blocks()), true);
+        $this->local->removeBlock($target);
         return $known ? 1 : 0;
     }
 
@@ -215,6 +232,76 @@ final class TrapManager
             throw new RefusedException("{$entry} is not on the whitelist");
         }
         $this->local->replaceLists($this->localPatterns(), $kept);
+    }
+
+    /** @return array<string, array{networks: int, invalid: int, reserved: int, tooWide: int, error: ?string}> */
+    public function import(?string $source = null): array
+    {
+        $this->assertManageable();
+        $sources = array_values(array_filter($this->listSources, static fn (ListSource $s): bool => $source === null || $s->name === $source));
+        if ($sources === []) {
+            throw new RefusedException($source === null ? 'No list sources are configured (the lists key)' : "No list source {$source} in the config");
+        }
+        $report = [];
+        foreach ($sources as $list) {
+            try {
+                $result = $this->importer->import($list);
+                $this->replaceList($list->name, $result['networks']);
+                $report[$list->name] = ['networks' => count($result['networks']), 'invalid' => $result['invalid'], 'reserved' => $result['reserved'], 'tooWide' => $result['tooWide'], 'error' => null];
+            } catch (StoreException|RefusedException $e) {
+                $report[$list->name] = ['networks' => 0, 'invalid' => 0, 'reserved' => 0, 'tooWide' => 0, 'error' => $e->getMessage()];
+            }
+        }
+        if ($source === null) {
+            $configured = array_map(static fn (ListSource $s): string => $s->name, $this->listSources);
+            foreach (array_keys($this->storedListStatus()) as $stale) {
+                if (!in_array($stale, $configured, true)) {
+                    $this->replaceList((string) $stale, []);
+                }
+            }
+        }
+        if ($this->central !== null) {
+            $this->syncer()->pull();
+        }
+        return $report;
+    }
+
+    /** @return array<string, array{count: int, at: int, configured: bool}> */
+    public function lists(): array
+    {
+        $this->assertManageable();
+        $lists = [];
+        foreach ($this->storedListStatus() as $name => $status) {
+            $lists[$name] = $status + ['configured' => false];
+        }
+        foreach ($this->listSources as $source) {
+            $lists[$source->name] = ['count' => $lists[$source->name]['count'] ?? 0, 'at' => $lists[$source->name]['at'] ?? 0, 'configured' => true];
+        }
+        ksort($lists);
+        return $lists;
+    }
+
+    /** @param list<string> $networks */
+    private function replaceList(string $name, array $networks): void
+    {
+        if ($this->central !== null) {
+            $this->central->replaceList($name, $networks, time());
+        } else {
+            $this->local->replaceList($name, $networks, time());
+        }
+    }
+
+    /** @return array<string, array{count: int, at: int}> */
+    private function storedListStatus(): array
+    {
+        return $this->central !== null ? $this->central->listStatus() : $this->local->listStatus();
+    }
+
+    /** An IP or a CIDR as Block stores it, null for anything else. */
+    private static function target(string $value): ?string
+    {
+        $value = trim($value);
+        return str_contains($value, '/') ? Network::parse($value)?->cidr() : Rules::normalizeIp($value);
     }
 
     private function syncer(): Sync

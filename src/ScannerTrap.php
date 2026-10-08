@@ -180,6 +180,8 @@ final class ScannerTrap
                 max(0, is_int($this->config['blockTtl'] ?? null) ? $this->config['blockTtl'] : 604800),
                 $this->logger(),
                 SubnetPolicy::fromConfig($this->config['subnets'] ?? null),
+                ListSource::fromConfig($this->config['lists'] ?? null),
+                new ListImporter(),
             );
         }
         return $this->manager;
