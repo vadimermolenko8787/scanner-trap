@@ -508,6 +508,26 @@ final class TrapManagerTest extends TestCase
         $manager->prune(3600);
     }
 
+    /** @return array<string, array{int}> */
+    public static function keepsBelowTheSyncFloor(): array
+    {
+        return ['an hour' => [3600], 'zero' => [0], 'negative' => [-86400]];
+    }
+
+    #[DataProvider('keepsBelowTheSyncFloor')]
+    public function test_without_subnets_a_keep_below_an_hour_and_the_clock_margin_is_refused(int $keep): void
+    {
+        $manager = $this->manager(false);
+        $this->expectException(RefusedException::class);
+        $this->expectExceptionMessage('3660');
+        $manager->prune($keep);
+    }
+
+    public function test_without_subnets_a_keep_of_an_hour_and_the_clock_margin_is_accepted(): void
+    {
+        $this->assertSame(0, $this->manager(false)->prune(3660)['central']);
+    }
+
     public function test_an_apcu_store_without_a_central_store_cannot_prune(): void
     {
         $manager = new TrapManager(new ApcuLocalStore(), null, self::CONFIG_PATTERNS, [], [], 'web1', 600);

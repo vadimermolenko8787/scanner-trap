@@ -9,9 +9,11 @@ use ScannerTrap\AllowEntry;
 use ScannerTrap\Block;
 use ScannerTrap\Central\CentralStore;
 use ScannerTrap\Central\PdoCentralStore;
+use ScannerTrap\Escalation;
 use ScannerTrap\Exception\StoreException;
 use ScannerTrap\Guard;
 use ScannerTrap\RequestContext;
+use ScannerTrap\Snapshot;
 use ScannerTrap\Store\FileLocalStore;
 use ScannerTrap\Store\LocalStore;
 use ScannerTrap\SubnetPolicy;
@@ -47,6 +49,104 @@ final class SyncTest extends TestCase
     private function trap(FileLocalStore $store, int $ttl = 600, string $ip = self::SCANNER): void
     {
         (new Guard($store, true, $ttl, 'web', [], ['/.env*']))->decide(new RequestContext($ip, 'GET', '/.env'));
+    }
+
+    /** @return LocalStore&object{added: int} the store, counting addBlock() calls */
+    private function spy(FileLocalStore $store): LocalStore
+    {
+        return new class ($store) implements LocalStore {
+            public int $added = 0;
+
+            public function __construct(private readonly FileLocalStore $inner)
+            {
+            }
+
+            public function read(string $ip): Snapshot
+            {
+                return $this->inner->read($ip);
+            }
+
+            public function addBlock(Block $block, bool $recordEvent, ?Escalation $escalation = null): bool
+            {
+                $this->added++;
+                return $this->inner->addBlock($block, $recordEvent, $escalation);
+            }
+
+            public function blocks(): array
+            {
+                return $this->inner->blocks();
+            }
+
+            public function removeBlock(string $target): void
+            {
+                $this->inner->removeBlock($target);
+            }
+
+            public function patterns(): ?array
+            {
+                return $this->inner->patterns();
+            }
+
+            public function allow(): ?array
+            {
+                return $this->inner->allow();
+            }
+
+            public function replaceLists(array $patterns, array $allow): void
+            {
+                $this->inner->replaceLists($patterns, $allow);
+            }
+
+            public function events(int $limit): array
+            {
+                return $this->inner->events($limit);
+            }
+
+            public function ackEvents(array $ids): void
+            {
+                $this->inner->ackEvents($ids);
+            }
+
+            public function waitForEvents(int $seconds): bool
+            {
+                return $this->inner->waitForEvents($seconds);
+            }
+
+            public function replaceList(string $source, array $networks, int $at): void
+            {
+                $this->inner->replaceList($source, $networks, $at);
+            }
+
+            public function listStatus(): array
+            {
+                return $this->inner->listStatus();
+            }
+
+            public function prune(int $before): int
+            {
+                return $this->inner->prune($before);
+            }
+
+            public function marker(): ?array
+            {
+                return $this->inner->marker();
+            }
+
+            public function saveMarker(array $marker): void
+            {
+                $this->inner->saveMarker($marker);
+            }
+
+            public function lock(int $seconds): bool
+            {
+                return $this->inner->lock($seconds);
+            }
+
+            public function unlock(): void
+            {
+                $this->inner->unlock();
+            }
+        };
     }
 
     public function test_push_ships_every_event_in_batches_and_removes_it_locally(): void
@@ -329,6 +429,16 @@ final class SyncTest extends TestCase
                 return $this->inner->networkBlocks($activeOnly);
             }
 
+            public function blocksAfter(int $id, int $limit): array
+            {
+                return $this->inner->blocksAfter($id, $limit);
+            }
+
+            public function liftedSince(int $time): array
+            {
+                return $this->inner->liftedSince($time);
+            }
+
             public function lift(string $ip, string $by): int
             {
                 return $this->inner->lift($ip, $by);
@@ -404,5 +514,94 @@ final class SyncTest extends TestCase
         $network = $this->central->blocks(true, '45.155.205.0/24');
         $this->assertCount(1, $network);
         $this->assertTrue($network[0]->isNetwork());
+    }
+
+    public function test_the_second_pull_adds_only_the_block_made_in_between(): void
+    {
+        $this->central->insertBlocks([new Block('45.155.205.1', time(), 0), new Block('45.155.205.2', time(), 0)]);
+        $spy = $this->spy($this->b);
+        (new Sync($spy, $this->central))->pull();
+        $this->assertSame(2, $spy->added);
+
+        $this->central->insertBlocks([new Block('45.155.205.3', time(), 0)]);
+        $before = $spy->added;
+        (new Sync($spy, $this->central))->pull();
+
+        $this->assertSame(1, $spy->added - $before);
+        $this->assertTrue($this->b->read('45.155.205.3')->blocked);
+    }
+
+    public function test_a_lift_reaches_the_other_server_on_an_incremental_pull(): void
+    {
+        $this->central->insertBlocks([new Block('45.155.205.1', time(), 0)]);
+        (new Sync($this->b, $this->central))->pull();
+        $this->central->lift('45.155.205.1', 'ops');
+
+        (new Sync($this->b, $this->central))->pull();
+
+        $this->assertFalse($this->b->read('45.155.205.1')->blocked);
+    }
+
+    public function test_a_lift_followed_by_a_new_block_of_the_same_target_leaves_the_new_block(): void
+    {
+        $this->central->insertBlocks([new Block('45.155.205.1', time(), 0)]);
+        (new Sync($this->b, $this->central))->pull();
+        $this->central->lift('45.155.205.1', 'ops');
+        $this->central->insertBlocks([new Block('45.155.205.1', time(), time() + 600)]);
+
+        (new Sync($this->b, $this->central))->pull();
+
+        $this->assertTrue($this->b->read('45.155.205.1')->blocked);
+    }
+
+    public function test_an_extension_reaches_the_other_server_once_the_full_pass_is_due(): void
+    {
+        $this->central->insertBlocks([new Block('45.155.205.1', time(), time() + 600)]);
+        (new Sync($this->b, $this->central))->pull();
+        $this->central->insertBlocks([new Block('45.155.205.1', time(), time() + 6000)]); // merged: the row's expiry grows
+        (new Sync($this->b, $this->central))->pull();
+        $this->assertEqualsWithDelta(time() + 600, $this->b->blocks()[0]->expiresAt, 2); // incremental: not seen yet
+
+        $marker = $this->b->marker();
+        $this->assertNotNull($marker);
+        $this->b->saveMarker(['fullAt' => time() - 3601] + $marker);
+        (new Sync($this->b, $this->central))->pull();
+
+        $this->assertEqualsWithDelta(time() + 6000, $this->b->blocks()[0]->expiresAt, 2);
+    }
+
+    public function test_a_full_pass_makes_a_timed_local_block_forever_when_the_central_one_is(): void
+    {
+        $this->central->insertBlocks([new Block('45.155.205.1', time(), time() + 600)]);
+        (new Sync($this->b, $this->central))->pull();
+        $this->central->insertBlocks([new Block('45.155.205.1', time(), 0)]); // merged into the row: now forever
+
+        $marker = $this->b->marker();
+        $this->assertNotNull($marker);
+        $this->b->saveMarker(['fullAt' => time() - 3601] + $marker);
+        (new Sync($this->b, $this->central))->pull();
+
+        $this->assertSame(0, $this->b->blocks()[0]->expiresAt);
+    }
+
+    public function test_a_marker_without_last_id_makes_a_full_pass(): void
+    {
+        $this->central->insertBlocks([new Block('45.155.205.1', time(), 0)]);
+        mkdir($this->dirB, 0775, true);
+        file_put_contents($this->dirB . '/owner', json_encode(['owner' => $this->central->owner(), 'version' => $this->central->version(), 'listsVersion' => $this->central->listsVersion()]));
+        $this->b->addBlock(new Block('91.92.248.1', time(), 0), false); // local only: a full pass removes it
+
+        (new Sync($this->b, $this->central))->pull();
+
+        $this->assertTrue($this->b->read('45.155.205.1')->blocked);
+        $this->assertFalse($this->b->read('91.92.248.1')->blocked);
+        $this->assertGreaterThan(-1, $this->b->marker()['lastId'] ?? -1);
+    }
+
+    public function test_a_full_pass_over_no_blocks_still_allows_incremental_pulls(): void
+    {
+        (new Sync($this->b, $this->central))->pull();
+
+        $this->assertSame(0, $this->b->marker()['lastId'] ?? null);
     }
 }

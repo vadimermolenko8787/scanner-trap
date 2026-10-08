@@ -285,7 +285,8 @@ final class TrapManager
 
     /**
      * Drops history older than $keep seconds: central rows lifted or expired before then, and the file store's leftovers.
-     * The keep may not be shorter than the subnet window: central escalation reads a network's latest lift from the history.
+     * The keep may not be shorter than the subnet window or an hour plus the clock margin: central escalation and the
+     * hourly full sync read the lift history.
      *
      * @return array{central: int, local: int}
      */
@@ -293,8 +294,9 @@ final class TrapManager
     {
         $this->assertManageable();
         $keep ??= self::PRUNE_KEEP;
-        if ($this->subnets !== null && $keep < $this->subnets->window()) {
-            throw new RefusedException("--keep must be at least the subnet window, {$this->subnets->window()} seconds");
+        $floor = max($this->subnets?->window() ?? 0, Sync::FULL_EVERY + Sync::CLOCK_MARGIN);
+        if ($keep < $floor) {
+            throw new RefusedException("--keep must be at least {$floor} seconds: the subnet window and the hourly full sync read the lift history");
         }
         $before = time() - $keep;
         return ['central' => $this->central?->prune($before) ?? 0, 'local' => $this->local->prune($before)];

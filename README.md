@@ -174,9 +174,9 @@ lists on their next sync:
     17 4 * * * cd /var/www/app && sudo -u www-data vendor/bin/scanner-trap import
     23 3 * * * cd /var/www/app && sudo -u www-data vendor/bin/scanner-trap prune
 
-`prune` drops central history older than 30 days (`--keep=SECONDS`, at least the subnet window) and, from the file
-store, expired block files and orphan locks at any age and `seen/` counters older than the keep; with file stores, run
-it on every server.
+`prune` drops central history older than 30 days (`--keep=SECONDS`, at least the subnet window and never below 3660)
+and, from the file store, expired block files and orphan locks at any age and `seen/` counters older than the keep;
+with file stores, run it on every server.
 
 ## Web server routing
 

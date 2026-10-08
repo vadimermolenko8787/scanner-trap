@@ -53,7 +53,7 @@ final class FileLocalStoreTest extends LocalStoreContract
         $store->addBlock(new Block('203.0.113.7', time(), 0), true);
         $store->addBlock(new Block('45.155.205.0/24', time(), 0, source: 'manual'), false);
         $store->replaceLists(['/.env*'], []);
-        $store->saveMarker('abc', 1);
+        $store->saveMarker(['owner' => 'abc', 'version' => 1, 'listsVersion' => -1, 'lastId' => -1, 'fullAt' => 0, 'pulledAt' => 0]);
 
         $this->assertFileExists($this->dir . '/blocks/' . sha1('203.0.113.7'));
         $this->assertFileExists($this->dir . '/networks.json');

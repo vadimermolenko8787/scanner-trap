@@ -9,7 +9,11 @@ use ScannerTrap\Block;
 use ScannerTrap\Escalation;
 use ScannerTrap\Snapshot;
 
-/** This server's copy of the blacklist and lists; Guard reads it once per request. Every failure is a StoreException. */
+/**
+ * This server's copy of the blacklist and lists; Guard reads it once per request. Every failure is a StoreException.
+ *
+ * @phpstan-type Marker array{owner: string, version: int, listsVersion: int, lastId: int, fullAt: int, pulledAt: int}
+ */
 interface LocalStore
 {
     /** One round trip: is the IP blocked (by itself or a network), is it listed, the patterns, the whitelist. */
@@ -64,10 +68,17 @@ interface LocalStore
     /** Removes what expiry left behind before $before (file store); returns how many files. Stores with TTLs return 0. */
     public function prune(int $before): int;
 
-    /** @return array{owner: string, version: int, listsVersion: int}|null the central store this one follows, the patterns' version and the lists' version (-1: stored before it existed) */
+    /**
+     * The central store this one follows, the patterns' and the lists' versions applied, the highest central block id
+     * applied (-1: none), the last full pass and the last pull (0: never). Absent keys get those defaults (lists' version
+     * -1), so a marker stored before they existed makes the next pull a full one.
+     *
+     * @return Marker|null
+     */
     public function marker(): ?array;
 
-    public function saveMarker(string $owner, int $version, int $listsVersion = -1): void;
+    /** @param Marker $marker */
+    public function saveMarker(array $marker): void;
 
     /** The sync lock; false when another process holds it. A store may hold it until unlock() or until the holder exits (file store) rather than for exactly $seconds. */
     public function lock(int $seconds): bool;

@@ -121,13 +121,14 @@ abstract class LocalStoreContract extends TestCase
         $this->assertLessThan(3.0, microtime(true) - $started);
     }
 
-    public function test_the_marker_is_absent_then_saved(): void
+    public function test_the_marker_is_absent_then_saved_whole(): void
     {
         $store = $this->createStore();
         $this->assertNull($store->marker());
 
-        $store->saveMarker('abc123', 7);
-        $this->assertSame(['owner' => 'abc123', 'version' => 7, 'listsVersion' => -1], $this->createStore()->marker());
+        $marker = ['owner' => 'abc123', 'version' => 7, 'listsVersion' => 9, 'lastId' => 42, 'fullAt' => 1000, 'pulledAt' => 2000];
+        $store->saveMarker($marker);
+        $this->assertSame($marker, $this->createStore()->marker());
     }
 
     public function test_the_sync_lock_is_exclusive_until_released(): void
@@ -370,16 +371,6 @@ abstract class LocalStoreContract extends TestCase
         $this->assertSame('big', $this->createStore()->read('45.77.200.9')->listed);
         $this->assertNull($store->read('46.0.0.1')->listed);
         $this->assertSame(20_000, $store->listStatus()['big']['count']);
-    }
-
-    public function test_the_marker_carries_the_lists_version(): void
-    {
-        $store = $this->createStore();
-        $store->saveMarker('abc', 3);
-        $this->assertSame(['owner' => 'abc', 'version' => 3, 'listsVersion' => -1], $store->marker());
-
-        $store->saveMarker('abc', 3, 9);
-        $this->assertSame(['owner' => 'abc', 'version' => 3, 'listsVersion' => 9], $this->createStore()->marker());
     }
 
     public function test_a_source_name_must_be_a_plain_word(): void

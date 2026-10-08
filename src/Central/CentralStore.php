@@ -33,6 +33,12 @@ interface CentralStore
     /** @return list<Block> every network block (the active ones, or with `$activeOnly` false the history too), newest first */
     public function networkBlocks(bool $activeOnly = true): array;
 
+    /** @return array<int, Block> active blocks with an id above `$id`, by id ascending, keyed by id, at most `$limit` */
+    public function blocksAfter(int $id, int $limit): array;
+
+    /** @return list<string> the targets (IPs and CIDRs) with a row lifted after `$time` and no active row now, sorted */
+    public function liftedSince(int $time): array;
+
     /** Lifts every active block of the IP or CIDR; returns how many. */
     public function lift(string $ip, string $by): int;
 

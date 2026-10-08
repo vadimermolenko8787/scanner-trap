@@ -121,27 +121,49 @@ final class PdoCentralStore implements CentralStore
             $where[] = 'ip = ?';
             $params[] = self::target($ip);
         }
-        return $this->selectBlocks($activeOnly, $where, $params, ' LIMIT ' . max(1, $limit));
+        return array_values($this->selectBlocks($activeOnly, $where, $params, ' ORDER BY id DESC', ' LIMIT ' . max(1, $limit)));
     }
 
     public function networkBlocks(bool $activeOnly = true): array
     {
-        return $this->selectBlocks($activeOnly, ["ip LIKE '%/%'"], [], '');
+        return array_values($this->selectBlocks($activeOnly, ["ip LIKE '%/%'"], [], ' ORDER BY id DESC', ''));
+    }
+
+    public function blocksAfter(int $id, int $limit): array
+    {
+        return $this->selectBlocks(true, ['id > ?'], [$id], ' ORDER BY id', ' LIMIT ' . max(1, $limit));
+    }
+
+    public function liftedSince(int $time): array
+    {
+        return $this->guarded(function () use ($time): array {
+            $targets = [];
+            $rows = $this->rows(
+                "SELECT DISTINCT b.ip FROM {$this->prefix}block b WHERE b.lifted_at > ?"
+                . " AND NOT EXISTS (SELECT 1 FROM {$this->prefix}block a WHERE a.ip = b.ip AND a.lifted_at IS NULL AND (a.expires_at IS NULL OR a.expires_at > ?))"
+                . ' ORDER BY b.ip',
+                [$time, time()],
+            );
+            foreach ($rows as $row) {
+                $targets[] = (string) $row['ip'];
+            }
+            return $targets;
+        });
     }
 
     /**
      * @param list<string> $where
      * @param list<mixed> $params
-     * @return list<Block>
+     * @return array<int, Block> keyed by id
      */
-    private function selectBlocks(bool $activeOnly, array $where, array $params, string $limit): array
+    private function selectBlocks(bool $activeOnly, array $where, array $params, string $order, string $limit): array
     {
-        return $this->guarded(function () use ($activeOnly, $where, $params, $limit): array {
+        return $this->guarded(function () use ($activeOnly, $where, $params, $order, $limit): array {
             if ($activeOnly) {
                 array_unshift($where, 'lifted_at IS NULL AND (expires_at IS NULL OR expires_at > ?)');
                 array_unshift($params, time());
             }
-            $sql = "SELECT * FROM {$this->prefix}block" . ($where ? ' WHERE ' . implode(' AND ', $where) : '') . ' ORDER BY id DESC' . $limit;
+            $sql = "SELECT * FROM {$this->prefix}block" . ($where ? ' WHERE ' . implode(' AND ', $where) : '') . $order . $limit;
             $blocks = [];
             foreach ($this->rows($sql, $params) as $row) {
                 $block = Block::fromArray([
@@ -150,7 +172,7 @@ final class PdoCentralStore implements CentralStore
                     'userAgent' => $row['user_agent'], 'source' => $row['source'], 'liftedAt' => $row['lifted_at'], 'liftedBy' => $row['lifted_by'],
                 ]);
                 if ($block !== null) {
-                    $blocks[] = $block;
+                    $blocks[(int) $row['id']] = $block;
                 }
             }
             return $blocks;

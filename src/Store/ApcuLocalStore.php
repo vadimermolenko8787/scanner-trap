@@ -200,12 +200,19 @@ final class ApcuLocalStore implements LocalStore
         if (!is_array($data) || !is_string($data['owner'] ?? null) || !is_int($data['version'] ?? null)) {
             return null;
         }
-        return ['owner' => $data['owner'], 'version' => $data['version'], 'listsVersion' => is_int($data['listsVersion'] ?? null) ? $data['listsVersion'] : -1];
+        return [
+            'owner' => $data['owner'],
+            'version' => $data['version'],
+            'listsVersion' => is_int($data['listsVersion'] ?? null) ? $data['listsVersion'] : -1,
+            'lastId' => is_int($data['lastId'] ?? null) ? $data['lastId'] : -1,
+            'fullAt' => is_int($data['fullAt'] ?? null) ? $data['fullAt'] : 0,
+            'pulledAt' => is_int($data['pulledAt'] ?? null) ? $data['pulledAt'] : 0,
+        ];
     }
 
-    public function saveMarker(string $owner, int $version, int $listsVersion = -1): void
+    public function saveMarker(array $marker): void
     {
-        apcu_store($this->key('owner'), $this->json(['owner' => $owner, 'version' => $version, 'listsVersion' => $listsVersion]));
+        apcu_store($this->key('owner'), $this->json($marker));
     }
 
     public function lock(int $seconds): bool

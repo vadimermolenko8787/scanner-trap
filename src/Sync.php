@@ -11,13 +11,16 @@ use ScannerTrap\Store\LocalStore;
 
 /**
  * Keeps one server's local store and the central store in step: push() ships the blocks made here, pull() brings every
- * server's blocks (addresses and networks), the patterns, the whitelist and the imported lists back.
+ * server's blocks (addresses and networks), the patterns, the whitelist and the imported lists back. A pull takes only
+ * the blocks and lifts made since the previous one, and compares every block on both sides once an hour.
  */
 final class Sync
 {
     private const BATCH = 200;
     private const ALL = 1_000_000;
     private const WAIT_SLICE = 5;
+    public const FULL_EVERY = 3600;
+    public const CLOCK_MARGIN = 60; // clock differences between the server that lifts and the one that pulls
 
     public function __construct(
         private readonly LocalStore $local,
@@ -101,6 +104,7 @@ final class Sync
 
     public function pull(): void
     {
+        $now = time();
         $owner = $this->assertOwner();
         $marker = $this->local->marker();
         $version = $this->central->version();
@@ -111,12 +115,21 @@ final class Sync
         if ($marker === null || $marker['listsVersion'] !== $listsVersion) {
             $this->pullLists();
         }
-        if ($marker === null || $marker['version'] !== $version || $marker['listsVersion'] !== $listsVersion) {
-            $this->local->saveMarker($owner, $version, $listsVersion);
-        }
+        $full = $marker === null || $marker['lastId'] === -1 || $marker['fullAt'] <= $now - self::FULL_EVERY;
+        $lastId = $full || $marker === null ? $this->reconcile() : $this->catchUp($marker['lastId'], $marker['pulledAt']);
+        $this->local->saveMarker([
+            'owner' => $owner, 'version' => $version, 'listsVersion' => $listsVersion,
+            'lastId' => $lastId, 'fullAt' => $full || $marker === null ? $now : $marker['fullAt'], 'pulledAt' => $now,
+        ]);
+    }
 
+    /** Every active block on both sides compared; returns the highest central id seen, 0 when there is none. */
+    private function reconcile(): int
+    {
         $central = [];
-        foreach ($this->central->blocks(true, null, self::ALL) as $block) {
+        $lastId = 0;
+        foreach ($this->central->blocksAfter(-1, self::ALL) as $id => $block) {
+            $lastId = max($lastId, $id);
             $known = $central[$block->ip] ?? null;
             if ($known === null || $known->expiresAt !== 0 && ($block->expiresAt === 0 || $block->expiresAt > $known->expiresAt)) {
                 $central[$block->ip] = $block;
@@ -137,6 +150,34 @@ final class Sync
         foreach (array_keys(array_diff_key($local, $central, $pending)) as $ip) {
             $this->local->removeBlock((string) $ip);
         }
+        // An expiry extended by a merge on another server, or made forever, arrives here at the latest on a full pass
+        foreach (array_intersect_key($central, $local) as $ip => $block) {
+            $mine = $local[$ip]->expiresAt;
+            if ($mine !== 0 && ($block->expiresAt === 0 || $block->expiresAt > $mine)) {
+                $this->local->removeBlock((string) $ip);
+                $this->local->addBlock($block, false);
+            }
+        }
+        return $lastId;
+    }
+
+    /** Only what changed since the previous pull: blocks inserted after $lastId, targets lifted since $pulledAt. */
+    private function catchUp(int $lastId, int $pulledAt): int
+    {
+        foreach ($this->central->blocksAfter($lastId, self::ALL) as $id => $block) {
+            $this->local->addBlock($block, false);
+            $lastId = max($lastId, $id);
+        }
+        $pending = [];
+        foreach ($this->local->events(self::ALL) as $event) {
+            $pending[$event->ip] = true;
+        }
+        foreach ($this->central->liftedSince($pulledAt - self::CLOCK_MARGIN) as $target) {
+            if (!isset($pending[$target])) {
+                $this->local->removeBlock($target);
+            }
+        }
+        return $lastId;
     }
 
     /** One source at a time: a large list never sits in memory together with the others. */

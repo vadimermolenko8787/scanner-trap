@@ -346,4 +346,38 @@ abstract class PdoCentralStoreContract extends TestCase
         sort($left);
         $this->assertSame(['45.155.205.3', '45.155.205.4', '45.155.205.5', '45.155.205.6', '45.155.205.7'], $left);
     }
+
+    public function test_blocks_after_an_id_are_the_active_ones_in_id_order(): void
+    {
+        $store = $this->installed();
+        $store->insertBlocks([new Block('45.155.205.1', time(), 0)]);
+        $first = array_key_first($store->blocksAfter(-1, 10));
+        $store->insertBlocks([new Block('45.155.205.2', time(), 0), new Block('45.155.205.3', time() - 100, time() - 1), new Block('45.155.205.0/24', time(), 0, source: 'subnet')]);
+        $store->lift('45.155.205.2', 'ops');
+
+        $after = $store->blocksAfter((int) $first, 10);
+        $this->assertSame(['45.155.205.0/24'], array_values(array_map(static fn (Block $b): string => $b->ip, $after)));
+        $this->assertGreaterThan($first, array_key_first($after));
+        $all = $store->blocksAfter(-1, 10);
+        $this->assertSame(array_keys($all), array_values(array_unique(array_keys($all))));
+        $ids = array_keys($all);
+        $sorted = $ids;
+        sort($sorted);
+        $this->assertSame($sorted, $ids);
+        $this->assertCount(1, $store->blocksAfter(-1, 1));
+    }
+
+    public function test_lifted_since_returns_a_lifted_target_and_not_one_blocked_again(): void
+    {
+        $store = $this->installed();
+        $store->insertBlocks([new Block('45.155.205.1', time(), 0), new Block('45.155.205.2', time(), 0), new Block('45.155.205.0/24', time(), 0, source: 'manual')]);
+        $since = time() - 1;
+        $store->lift('45.155.205.1', 'ops');
+        $store->lift('45.155.205.2', 'ops');
+        $store->lift('45.155.205.0/24', 'ops');
+        $store->insertBlocks([new Block('45.155.205.2', time(), 0)]);
+
+        $this->assertSame(['45.155.205.0/24', '45.155.205.1'], $store->liftedSince($since));
+        $this->assertSame([], $store->liftedSince(time() + 10));
+    }
 }
