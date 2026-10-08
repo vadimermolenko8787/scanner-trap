@@ -122,6 +122,23 @@ final class SyncTest extends TestCase
         $this->assertSame(['/.env*', '~union select'], $this->a->patterns());
     }
 
+    public function test_push_refuses_a_foreign_central_store_before_writing_to_it(): void
+    {
+        (new Sync($this->a, $this->central))->pull();
+        $this->trap($this->a);
+        $foreign = new PdoCentralStore(Env::pdo('sqlite'));
+        $foreign->install(['/.git'], [], 'test');
+
+        try {
+            (new Sync($this->a, $foreign))->push();
+            $this->fail('push() must refuse a foreign central store');
+        } catch (StoreException $e) {
+            $this->assertStringContainsString('another central store', $e->getMessage());
+        }
+        $this->assertSame([], $foreign->blocks(false, null, 10));
+        $this->assertCount(1, $this->a->events(10));
+    }
+
     public function test_lists_are_replaced_only_when_the_central_version_changed(): void
     {
         $sync = new Sync($this->a, $this->central);

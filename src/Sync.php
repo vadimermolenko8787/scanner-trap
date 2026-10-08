@@ -29,6 +29,7 @@ final class Sync
     /** Returns how many events were shipped. An event leaves the local store only after its batch is inserted. */
     public function push(): int
     {
+        $this->assertOwner();
         $pushed = 0;
         while (($events = $this->local->events(self::BATCH)) !== []) {
             $this->central->insertBlocks(array_values($events));
@@ -43,12 +44,8 @@ final class Sync
 
     public function pull(): void
     {
-        $owner = $this->central->owner();
+        $owner = $this->assertOwner();
         $marker = $this->local->marker();
-        // Two installations with different central stores on one Redis would overwrite each other's lists every minute
-        if ($marker !== null && $marker['owner'] !== $owner) {
-            throw new StoreException("This local store follows another central store ({$marker['owner']}), not {$owner}; nothing was written");
-        }
         $version = $this->central->version();
         if ($marker === null || $marker['version'] !== $version) {
             $this->local->replaceLists($this->central->patterns(), $this->central->allowEntries());
@@ -77,6 +74,17 @@ final class Sync
         foreach (array_keys(array_diff_key($local, $central, $pending)) as $ip) {
             $this->local->removeBlock((string) $ip);
         }
+    }
+
+    /** Two installations with different central stores on one Redis would overwrite each other's lists every minute */
+    private function assertOwner(): string
+    {
+        $owner = $this->central->owner();
+        $marker = $this->local->marker();
+        if ($marker !== null && $marker['owner'] !== $owner) {
+            throw new StoreException("This local store follows another central store ({$marker['owner']}), not {$owner}; nothing was written");
+        }
+        return $owner;
     }
 
     /** One sync run: push, pull, then push new events as they come until $watchSeconds pass. False when already running. */
