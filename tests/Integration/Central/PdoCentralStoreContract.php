@@ -216,6 +216,31 @@ abstract class PdoCentralStoreContract extends TestCase
         $this->assertSame(1200, $store->listStatus()['big']['count']);
     }
 
+    public function test_two_imports_of_one_source_at_once_both_succeed(): void
+    {
+        $store = $this->installed();
+        $config = Env::pdoConfig($this->driver(), $this->pdo);
+        for ($trial = 0; $trial < 3; $trial++) {
+            // Both imports add rows the database does not hold yet, so without a lock both would insert them
+            $counts = [3000 + $trial * 400, 3200 + $trial * 400];
+            $startAt = sprintf('%.6F', microtime(true) + 0.5);
+            $processes = [];
+            foreach ($counts as $count) {
+                $process = proc_open([PHP_BINARY, __DIR__ . '/../../fixtures/import-central.php', $config['dsn'], $config['user'], $config['password'], (string) $count, $startAt], [1 => ['file', '/dev/null', 'w'], 2 => ['pipe', 'w']], $pipes);
+                $this->assertIsResource($process);
+                $processes[] = [$process, $pipes[2]];
+            }
+            foreach ($processes as [$process, $stderr]) {
+                $error = stream_get_contents($stderr);
+                $this->assertSame(0, proc_close($process), "trial {$trial}: {$error}");
+            }
+
+            $count = $store->listStatus()['big']['count'];
+            $this->assertContains($count, $counts, "trial {$trial}");
+            $this->assertCount($count, $store->listEntries('big'), "trial {$trial}");
+        }
+    }
+
     public function test_network_blocks_are_stored_lifted_and_filtered_like_ip_blocks(): void
     {
         $store = $this->installed();

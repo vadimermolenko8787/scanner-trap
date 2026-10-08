@@ -253,6 +253,9 @@ final class PdoCentralStore implements CentralStore
             }
         }
         return $this->transaction(function () use ($source, $wanted, $at): bool {
+            // A write first: a second import from another server waits here until this one commits, then reads its
+            // rows, instead of inserting the same rows (MySQL, PostgreSQL) or deadlocking (SQLite)
+            $this->execute("UPDATE {$this->prefix}meta SET value = value WHERE name = 'lists_version'", []);
             $current = [];
             // Row by row: a source of 200 000 entries must not also sit in memory as fetched rows
             $statement = $this->pdo->prepare("SELECT cidr FROM {$this->prefix}list_entry WHERE source = ?");
