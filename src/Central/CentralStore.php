@@ -69,6 +69,6 @@ interface CentralStore
     /** Incremented by every list change; 0 when never imported. */
     public function listsVersion(): int;
 
-    /** @return list<string> distinct addresses (not networks) with an active trap block since `$since` */
+    /** @return array<string, int> distinct addresses (not networks) with an active trap block since `$since`, each with the time of its latest one */
     public function recentTrapIps(int $since): array;
 }

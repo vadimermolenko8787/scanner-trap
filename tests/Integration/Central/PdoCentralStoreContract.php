@@ -252,7 +252,7 @@ abstract class PdoCentralStoreContract extends TestCase
             new Block('45.155.205.4', $now - 10, $now - 1),
         ]);
 
-        $this->assertSame(['45.155.205.1'], $store->recentTrapIps($now - 3600));
+        $this->assertSame(['45.155.205.1' => $now - 10], $store->recentTrapIps($now - 3600));
     }
 
     public function test_install_adds_the_list_table_to_an_existing_installation(): void

@@ -156,7 +156,8 @@ final class RedisLocalStore implements LocalStore
 
     public function removeBlock(string $target): void
     {
-        $this->redis->raw('DEL', $this->targetKey($target));
+        // A network's escalation counter goes with it, or the next single hit would block the network again
+        $this->redis->raw('DEL', $this->targetKey($target), ...(str_contains($target, '/') ? [$this->key('seen:' . $target)] : []));
     }
 
     public function patterns(): ?array

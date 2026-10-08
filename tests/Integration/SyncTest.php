@@ -226,6 +226,26 @@ final class SyncTest extends TestCase
         $this->assertTrue($this->b->read('45.155.205.250')->blocked);
     }
 
+    public function test_a_lifted_network_is_not_blocked_again_by_the_next_single_hit(): void
+    {
+        $policy = new SubnetPolicy();
+        $syncA = new Sync($this->a, $this->central, null, $policy);
+        $guardA = new Guard($this->a, true, 600, 'web-a', [], ['/.env*'], null, null, true, $policy);
+        foreach (['45.155.205.1', '45.155.205.2', '45.155.205.3'] as $ip) {
+            $guardA->decide(new RequestContext($ip, 'GET', '/.env'));
+        }
+        $syncA->run();
+        $this->assertCount(1, $this->central->networkBlocks());
+
+        $this->central->lift('45.155.205.0/24', 'ops');
+        $this->a->removeBlock('45.155.205.0/24');
+        $guardA->decide(new RequestContext('45.155.205.4', 'GET', '/.env'));
+        $syncA->run();
+
+        $this->assertSame([], $this->central->networkBlocks());
+        $this->assertFalse($this->a->read('45.155.205.250')->blocked);
+    }
+
     public function test_a_network_block_lifted_centrally_leaves_every_server(): void
     {
         $this->central->insertBlocks([new Block('45.155.205.0/24', time(), 0, source: Block::SOURCE_MANUAL)]);

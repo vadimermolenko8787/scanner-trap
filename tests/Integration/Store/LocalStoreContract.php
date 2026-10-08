@@ -240,6 +240,24 @@ abstract class LocalStoreContract extends TestCase
         }
     }
 
+    public function test_an_unblocked_network_is_not_blocked_again_by_the_next_single_hit(): void
+    {
+        $store = $this->createStore();
+        $escalation = new Escalation('45.155.205.0/24', '4/24', 3, 86400);
+        foreach (['45.155.205.1', '45.155.205.2', '45.155.205.3'] as $ip) {
+            $store->addBlock($this->hit($ip), false, $escalation);
+        }
+        $this->assertSame('45.155.205.0/24', $store->read('45.155.205.250')->network);
+
+        $store->removeBlock('45.155.205.0/24');
+        $store->addBlock($this->hit('45.155.205.4'), false, $escalation);
+
+        $this->assertNull($store->read('45.155.205.250')->network);
+        $store->addBlock($this->hit('45.155.205.5'), false, $escalation);
+        $store->addBlock($this->hit('45.155.205.6'), false, $escalation);
+        $this->assertSame('45.155.205.0/24', $store->read('45.155.205.250')->network, 'three new hits escalate again');
+    }
+
     public function test_one_address_counted_twice_is_still_one(): void
     {
         $store = $this->createStore();

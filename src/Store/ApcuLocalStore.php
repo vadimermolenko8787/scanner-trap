@@ -82,6 +82,10 @@ final class ApcuLocalStore implements LocalStore
     public function removeBlock(string $target): void
     {
         apcu_delete($this->targetKey($target));
+        // A network's escalation counter goes with it, or the next single hit would block the network again
+        if (str_contains($target, '/')) {
+            apcu_delete($this->key('seen:' . $target));
+        }
     }
 
     public function patterns(): ?array

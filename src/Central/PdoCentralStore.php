@@ -311,12 +311,12 @@ final class PdoCentralStore implements CentralStore
         return $this->guarded(function () use ($since): array {
             $ips = [];
             $rows = $this->rows(
-                "SELECT DISTINCT ip FROM {$this->prefix}block WHERE source = ? AND lifted_at IS NULL AND (expires_at IS NULL OR expires_at > ?) AND blocked_at >= ? ORDER BY ip",
+                "SELECT ip, MAX(blocked_at) AS at FROM {$this->prefix}block WHERE source = ? AND lifted_at IS NULL AND (expires_at IS NULL OR expires_at > ?) AND blocked_at >= ? GROUP BY ip ORDER BY ip",
                 [Block::SOURCE_TRAP, time(), $since],
             );
             foreach ($rows as $row) {
                 if (!str_contains((string) $row['ip'], '/')) {
-                    $ips[] = (string) $row['ip'];
+                    $ips[(string) $row['ip']] = (int) $row['at'];
                 }
             }
             return $ips;

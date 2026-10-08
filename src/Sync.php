@@ -79,10 +79,15 @@ final class Sync
         if ($newest === []) {
             return;
         }
+        // Hits from before a network's latest lift do not count: an operator's unblock starts that network's count afresh
+        $liftedAt = [];
+        foreach (array_keys($newest) as $network) {
+            $liftedAt[$network] = $this->central->blocks(false, (string) $network, 1)[0]->liftedAt ?? 0;
+        }
         $counts = [];
-        foreach ($this->central->recentTrapIps(time() - $this->subnets->window()) as $ip) {
-            $network = $this->subnets->escalationFor($ip)?->network;
-            if ($network !== null) {
+        foreach ($this->central->recentTrapIps(time() - $this->subnets->window()) as $ip => $blockedAt) {
+            $network = $this->subnets->escalationFor((string) $ip)?->network;
+            if ($network !== null && isset($liftedAt[$network]) && $blockedAt > $liftedAt[$network]) {
                 $counts[$network] = ($counts[$network] ?? 0) + 1;
             }
         }

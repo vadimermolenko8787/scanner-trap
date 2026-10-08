@@ -151,6 +151,8 @@ final class FileLocalStore implements LocalStore
             @unlink($this->blockFile($target));
             return;
         }
+        // The network's escalation counter goes with it, or the next single hit would block the network again
+        @unlink($this->dir . '/' . self::SEEN . '/' . sha1($target));
         $this->updateNetworks(static function (array $data) use ($network): ?array {
             if (!isset($data['blocks'][$network->family][$network->prefix][$network->address])) {
                 return null;
