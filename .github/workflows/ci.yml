@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.2', '8.3', '8.4']
+    services:
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: trap
+          MYSQL_USER: trap
+          MYSQL_PASSWORD: trap
+          MYSQL_ROOT_PASSWORD: root
+        ports: ['3306:3306']
+        options: --health-cmd "mysqladmin ping -h 127.0.0.1" --health-interval 5s --health-timeout 3s --health-retries 20
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: trap
+          POSTGRES_USER: trap
+          POSTGRES_PASSWORD: trap
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U trap" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      SCANNER_TRAP_REDIS_HOST: 127.0.0.1
+      SCANNER_TRAP_REDIS_PORT: '6379'
+      SCANNER_TRAP_REDIS_DB: '12'
+      SCANNER_TRAP_MYSQL_DSN: mysql:host=127.0.0.1;port=3306;dbname=trap
+      SCANNER_TRAP_PGSQL_DSN: pgsql:host=127.0.0.1;port=5432;dbname=trap
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: redis, apcu, pdo_mysql, pdo_pgsql, pdo_sqlite, mbstring
+          ini-values: apc.enable_cli=1, apc.use_request_time=0
+          coverage: none
+      - run: composer update --no-interaction --no-progress --prefer-dist
+      - run: vendor/bin/phpunit --fail-on-skipped
+      - if: matrix.php == '8.3'
+        run: composer stan
+      - if: matrix.php == '8.3'
+        run: composer cs
