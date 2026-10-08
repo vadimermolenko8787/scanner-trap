@@ -134,6 +134,24 @@ final class CliTest extends TestCase
         $this->assertSame(1, (int) $count->fetchColumn());
     }
 
+    public function test_the_acting_user_is_the_process_user_not_the_script_owner(): void
+    {
+        $pdo = Env::pdo('sqlite');
+        $this->writeConfig(['central' => Env::pdoConfig('sqlite', $pdo)]);
+        $user = function_exists('posix_geteuid') && function_exists('posix_getpwuid')
+            ? (posix_getpwuid(posix_geteuid())['name'] ?? '')
+            : (string) getenv('USER');
+        $this->assertNotSame('', $user);
+
+        $this->assertSame(0, $this->cli('install')[0]);
+        $this->assertSame(0, $this->cli('block', '203.0.113.7')[0]);
+        $this->assertSame(0, $this->cli('unblock', '203.0.113.7')[0]);
+
+        $statement = $pdo->query("SELECT lifted_by FROM scanner_trap_block WHERE ip = '203.0.113.7'");
+        $this->assertNotFalse($statement);
+        $this->assertStringStartsWith($user . '@', (string) $statement->fetchColumn());
+    }
+
     public function test_an_unreachable_store_exits_with_3(): void
     {
         $this->writeConfig(['local' => ['type' => 'redis', 'host' => '127.0.0.1', 'port' => 1]]);

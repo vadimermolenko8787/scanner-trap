@@ -88,7 +88,7 @@ final class Cli
      */
     private function execute(TrapManager $manager, string $command, array $positional, array $options, int $watch): void
     {
-        $by = (get_current_user() ?: 'cli') . '@' . (gethostname() ?: 'localhost');
+        $by = $this->operator() . '@' . (gethostname() ?: 'localhost');
         $text = static fn (string $name): string => is_string($options[$name] ?? null) ? $options[$name] : '';
         switch ($command) {
             case 'install':
@@ -193,6 +193,24 @@ final class Cli
             throw new \InvalidArgumentException("--{$name} takes a number of seconds.");
         }
         return (int) $options[$name];
+    }
+
+    /** The user running this process (get_current_user() would name the script's owner). */
+    private function operator(): string
+    {
+        if (function_exists('posix_geteuid') && function_exists('posix_getpwuid')) {
+            $entry = posix_getpwuid(posix_geteuid());
+            if ($entry !== false && $entry['name'] !== '') {
+                return $entry['name'];
+            }
+        }
+        foreach (['USER', 'USERNAME'] as $variable) {
+            $value = getenv($variable);
+            if (is_string($value) && $value !== '') {
+                return $value;
+            }
+        }
+        return 'cli';
     }
 
     private function say(string $line): void
