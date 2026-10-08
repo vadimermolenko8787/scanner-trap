@@ -14,11 +14,6 @@ abstract class LocalStoreContract extends TestCase
 {
     abstract protected function createStore(): LocalStore;
 
-    protected function supportsEvents(): bool
-    {
-        return true;
-    }
-
     public function test_an_empty_store_has_no_block_and_no_lists(): void
     {
         $snapshot = $this->createStore()->read('203.0.113.7');
@@ -92,9 +87,6 @@ abstract class LocalStoreContract extends TestCase
 
     public function test_only_the_creating_call_queues_an_event(): void
     {
-        if (!$this->supportsEvents()) {
-            $this->markTestSkipped('This store keeps no events.');
-        }
         $store = $this->createStore();
         $block = new Block('203.0.113.7', time(), time() + 600, 'web1', 'GET', '/.env', '/.env*', 'curl');
         $store->addBlock($block, true);
@@ -108,9 +100,6 @@ abstract class LocalStoreContract extends TestCase
 
     public function test_events_come_oldest_first_up_to_the_limit_and_leave_when_acknowledged(): void
     {
-        if (!$this->supportsEvents()) {
-            $this->markTestSkipped('This store keeps no events.');
-        }
         $store = $this->createStore();
         foreach (['203.0.113.1', '203.0.113.2', '203.0.113.3'] as $ip) {
             $store->addBlock(new Block($ip, time(), 0), true);

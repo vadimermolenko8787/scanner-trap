@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ScannerTrap\Tests\Integration\Store;
 
+use ScannerTrap\Block;
 use ScannerTrap\Store\ApcuLocalStore;
 use ScannerTrap\Store\LocalStore;
 
@@ -22,8 +23,21 @@ final class ApcuLocalStoreTest extends LocalStoreContract
         return new ApcuLocalStore();
     }
 
-    protected function supportsEvents(): bool
+    public function test_only_the_creating_call_queues_an_event(): void
     {
-        return false;
+        $store = $this->createStore();
+
+        $this->assertTrue($store->addBlock(new Block('203.0.113.7', time(), time() + 600), true));
+        $this->assertTrue($store->read('203.0.113.7')->blocked);
+        $this->assertSame([], $store->events(10));
+    }
+
+    public function test_events_come_oldest_first_up_to_the_limit_and_leave_when_acknowledged(): void
+    {
+        $store = $this->createStore();
+
+        $store->ackEvents([]);
+        $this->assertSame([], $store->events(10));
+        $this->assertFalse($store->waitForEvents(0));
     }
 }
