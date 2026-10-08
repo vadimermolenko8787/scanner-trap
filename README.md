@@ -114,8 +114,14 @@ whitelist entries, as `lifted_by` of an unblock, and, when `block` is given no `
 | SQL fragment | `~union select` | the fragment anywhere in the decoded URI |
 | scanner signature | `@sqlmap` | the fragment in the User-Agent, case-insensitively, on any page |
 
-`DefaultPatterns::LIST` is safe for any application. Add `DefaultPatterns::WORDPRESS_PROBES` only if the site is not
-WordPress: `'patterns' => [...DefaultPatterns::LIST, ...DefaultPatterns::WORDPRESS_PROBES]`.
+| Constant | Add it when |
+|---|---|
+| `LIST` | always, the default |
+| `WORDPRESS_PROBES` | the site is not WordPress |
+| `LOOSE_FRAGMENTS` | no query string carries free text |
+
+`'patterns' => [...DefaultPatterns::LIST, ...DefaultPatterns::WORDPRESS_PROBES]`, or
+`'patterns' => [...DefaultPatterns::LIST, ...DefaultPatterns::LOOSE_FRAGMENTS]`.
 
 ## Scanners that change address
 
@@ -207,8 +213,9 @@ from then on the stored lists apply.
   them, from the right.
 * **Cross-site requests** (`Sec-Fetch-Site: cross-site`) to a decoy are refused but never blacklist the visitor, so
   another site cannot lock your visitors out with an `<img>`.
-* **GET search forms.** A search box may legitimately send quote fragments such as `" or "`. Review the default `~`
-  fragments for sites with a GET search, and drop or adjust the ones your visitors can produce.
+* **GET search forms.** A search box may legitimately send quote fragments such as `" or "`, or words such as
+  `sleep(`. These risky fragments are opt-in through `DefaultPatterns::LOOSE_FRAGMENTS`: add them only if no query
+  string carries free text.
 * **Fetch Metadata limits.** Same-origin user content such as `<img src="/.env">` in a comment makes the browser send
   `Sec-Fetch-Site: same-origin`, so it blacklists everyone who views it: sanitise user content. Browsers that send no
   `Sec-Fetch-Site` are not protected from the cross-site case.
