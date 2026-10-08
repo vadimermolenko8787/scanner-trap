@@ -7,7 +7,7 @@ namespace ScannerTrap\Central;
 use ScannerTrap\AllowEntry;
 use ScannerTrap\Block;
 
-/** The source of truth in mode 3: every server's blocks, the patterns and the whitelist. Failures are StoreExceptions. */
+/** The source of truth in mode 3: every server's blocks, the patterns, the whitelist and the imported lists. Failures are StoreExceptions. */
 interface CentralStore
 {
     /**
@@ -27,10 +27,10 @@ interface CentralStore
     /** @param list<Block> $blocks merged into the IP's active block when there is one */
     public function insertBlocks(array $blocks): void;
 
-    /** @return list<Block> newest first */
+    /** @return list<Block> newest first; `$ip` may be an IP or a CIDR */
     public function blocks(bool $activeOnly = true, ?string $ip = null, int $limit = 1000): array;
 
-    /** Lifts every active block of the IP; returns how many. */
+    /** Lifts every active block of the IP or CIDR; returns how many. */
     public function lift(string $ip, string $by): int;
 
     /** @return list<string> enabled and valid patterns, oldest first */
@@ -48,4 +48,24 @@ interface CentralStore
     public function saveAllow(AllowEntry $entry): void;
 
     public function removeAllow(string $entry): bool;
+
+    /**
+     * Makes exactly `$networks` (normalized CIDRs) the entries of the source, all stamped `imported_at = $at`, in one
+     * transaction. True, and `listsVersion` incremented, only when the set changed.
+     *
+     * @param list<string> $networks
+     */
+    public function replaceList(string $source, array $networks, int $at): bool;
+
+    /** @return list<string> the CIDRs of one source, sorted */
+    public function listEntries(string $source): array;
+
+    /** @return array<string, array{count: int, at: int}> per source: entries and last import time */
+    public function listStatus(): array;
+
+    /** Incremented by every list change; 0 when never imported. */
+    public function listsVersion(): int;
+
+    /** @return list<string> distinct addresses (not networks) with an active trap block since `$since` */
+    public function recentTrapIps(int $since): array;
 }

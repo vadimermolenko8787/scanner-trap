@@ -181,4 +181,73 @@ abstract class PdoCentralStoreContract extends TestCase
             $this->pdo->exec('DROP TABLE IF EXISTS other_' . $table);
         }
     }
+
+    public function test_a_list_is_replaced_and_versioned(): void
+    {
+        $store = $this->installed();
+        $this->assertSame(0, $store->listsVersion());
+
+        $this->assertTrue($store->replaceList('spamhaus-drop', ['45.155.205.0/24', '2a01:4f8:c0c:1234::/64'], 1000));
+        $this->assertSame(1, $store->listsVersion());
+        $this->assertFalse($store->replaceList('spamhaus-drop', ['2a01:4f8:c0c:1234::/64', '45.155.205.0/24'], 2000));
+        $this->assertSame(1, $store->listsVersion());
+        $this->assertSame(['spamhaus-drop' => ['count' => 2, 'at' => 2000]], $store->listStatus());
+
+        $this->assertTrue($store->replaceList('own', ['91.92.248.0/22'], 3000));
+        $this->assertTrue($store->replaceList('spamhaus-drop', ['45.155.205.0/24'], 4000));
+        $this->assertSame(3, $store->listsVersion());
+        $this->assertSame(['91.92.248.0/22'], $store->listEntries('own'));
+        $this->assertSame(['45.155.205.0/24'], $store->listEntries('spamhaus-drop'));
+        $this->assertSame([], $store->listEntries('nope'));
+
+        $this->assertTrue($store->replaceList('own', [], 5000));
+        $this->assertSame(['spamhaus-drop'], array_keys($store->listStatus()));
+    }
+
+    public function test_a_large_list_is_stored(): void
+    {
+        $store = $this->installed();
+        $networks = [];
+        for ($i = 0; $i < 1200; $i++) {
+            $networks[] = sprintf('45.%d.%d.0/24', intdiv($i, 256), $i % 256);
+        }
+
+        $this->assertTrue($store->replaceList('big', $networks, 1000));
+        $this->assertSame(1200, $store->listStatus()['big']['count']);
+    }
+
+    public function test_network_blocks_are_stored_lifted_and_filtered_like_ip_blocks(): void
+    {
+        $store = $this->installed();
+        $store->insertBlocks([new Block('45.155.205.0/24', time(), 0, 'web1', '', '', '/.env*', '', Block::SOURCE_SUBNET)]);
+
+        $this->assertSame('45.155.205.0/24', $store->blocks(true, '45.155.205.7/24')[0]->ip);
+        $this->assertSame(1, $store->lift('45.155.205.99/24', 'ops'));
+        $this->assertSame([], $store->blocks());
+    }
+
+    public function test_recent_trap_ips_are_active_trap_blocks_of_addresses_only(): void
+    {
+        $store = $this->installed();
+        $now = time();
+        $store->insertBlocks([
+            new Block('45.155.205.1', $now - 10, 0),
+            new Block('45.155.205.2', $now - 5000, 0),
+            new Block('45.155.205.3', $now - 10, 0, source: Block::SOURCE_MANUAL),
+            new Block('45.155.205.0/24', $now - 10, 0, source: Block::SOURCE_SUBNET),
+            new Block('45.155.205.4', $now - 10, $now - 1),
+        ]);
+
+        $this->assertSame(['45.155.205.1'], $store->recentTrapIps($now - 3600));
+    }
+
+    public function test_install_adds_the_list_table_to_an_existing_installation(): void
+    {
+        $store = $this->installed();
+        $this->pdo->exec('DROP TABLE scanner_trap_list_entry');
+
+        $store->install([], [], 'test');
+
+        $this->assertTrue($store->replaceList('own', ['45.155.205.0/24'], 1000));
+    }
 }

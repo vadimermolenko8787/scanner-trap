@@ -7,14 +7,17 @@ namespace ScannerTrap\Central;
 use ScannerTrap\AllowEntry;
 use ScannerTrap\Block;
 use ScannerTrap\Exception\StoreException;
+use ScannerTrap\Network;
 use ScannerTrap\Rules;
 
 /**
- * Tables {prefix}block, pattern, allow, meta. One active block per IP, kept portably: an event first looks for the IP's
+ * Tables {prefix}block, pattern, allow, meta, list_entry. One active block per IP, kept portably: an event first looks for the IP's
  * active row and extends it. Two servers racing may leave two active rows; readers treat the IP as blocked if any is.
  */
 final class PdoCentralStore implements CentralStore
 {
+    private const INSERT_BATCH = 500;
+
     private readonly string $driver;
 
     public function __construct(private readonly \PDO $pdo, private readonly string $prefix = 'scanner_trap_')
@@ -117,7 +120,7 @@ final class PdoCentralStore implements CentralStore
             }
             if ($ip !== null) {
                 $where[] = 'ip = ?';
-                $params[] = Rules::normalizeIp($ip) ?? $ip;
+                $params[] = self::target($ip);
             }
             $sql = "SELECT * FROM {$this->prefix}block" . ($where ? ' WHERE ' . implode(' AND ', $where) : '') . ' ORDER BY id DESC LIMIT ' . max(1, $limit);
             $blocks = [];
@@ -139,7 +142,7 @@ final class PdoCentralStore implements CentralStore
     {
         return $this->guarded(fn (): int => $this->execute(
             "UPDATE {$this->prefix}block SET lifted_at = ?, lifted_by = ? WHERE ip = ? AND lifted_at IS NULL",
-            [time(), mb_substr($by, 0, 255), Rules::normalizeIp($ip) ?? $ip],
+            [time(), mb_substr($by, 0, 255), self::target($ip)],
         ));
     }
 
@@ -222,6 +225,89 @@ final class PdoCentralStore implements CentralStore
         });
     }
 
+    public function replaceList(string $source, array $networks, int $at): bool
+    {
+        $wanted = [];
+        foreach ($networks as $cidr) {
+            $network = Network::parse($cidr);
+            if ($network !== null) {
+                $wanted[$network->cidr()] = true;
+            }
+        }
+        return $this->transaction(function () use ($source, $wanted, $at): bool {
+            $current = [];
+            foreach ($this->rows("SELECT cidr FROM {$this->prefix}list_entry WHERE source = ?", [$source]) as $row) {
+                $current[(string) $row['cidr']] = true;
+            }
+            $removed = array_keys(array_diff_key($current, $wanted));
+            $added = array_keys(array_diff_key($wanted, $current));
+            foreach (array_chunk($removed, self::INSERT_BATCH) as $chunk) {
+                $this->execute("DELETE FROM {$this->prefix}list_entry WHERE source = ? AND cidr IN (" . implode(', ', array_fill(0, count($chunk), '?')) . ')', [$source, ...$chunk]);
+            }
+            foreach (array_chunk($added, self::INSERT_BATCH) as $chunk) {
+                $values = implode(', ', array_fill(0, count($chunk), '(?, ?, ?)'));
+                $params = [];
+                foreach ($chunk as $cidr) {
+                    array_push($params, $source, $cidr, $at);
+                }
+                $this->execute("INSERT INTO {$this->prefix}list_entry (source, cidr, imported_at) VALUES {$values}", $params);
+            }
+            $this->execute("UPDATE {$this->prefix}list_entry SET imported_at = ? WHERE source = ?", [$at, $source]);
+            if ($removed === [] && $added === []) {
+                return false;
+            }
+            if ($this->meta('lists_version') === null) {
+                $this->execute("INSERT INTO {$this->prefix}meta (name, value) VALUES ('lists_version', '0')", []);
+            }
+            $this->execute($this->incrementSql('lists_version'), []);
+            return true;
+        });
+    }
+
+    public function listEntries(string $source): array
+    {
+        return $this->guarded(function () use ($source): array {
+            $entries = [];
+            foreach ($this->rows("SELECT cidr FROM {$this->prefix}list_entry WHERE source = ? ORDER BY cidr", [$source]) as $row) {
+                $entries[] = (string) $row['cidr'];
+            }
+            return $entries;
+        });
+    }
+
+    public function listStatus(): array
+    {
+        return $this->guarded(function (): array {
+            $status = [];
+            foreach ($this->rows("SELECT source, COUNT(*) AS n, MAX(imported_at) AS at FROM {$this->prefix}list_entry GROUP BY source ORDER BY source", []) as $row) {
+                $status[(string) $row['source']] = ['count' => (int) $row['n'], 'at' => (int) $row['at']];
+            }
+            return $status;
+        });
+    }
+
+    public function listsVersion(): int
+    {
+        return $this->guarded(fn (): int => (int) ($this->meta('lists_version') ?? 0));
+    }
+
+    public function recentTrapIps(int $since): array
+    {
+        return $this->guarded(function () use ($since): array {
+            $ips = [];
+            $rows = $this->rows(
+                "SELECT DISTINCT ip FROM {$this->prefix}block WHERE source = ? AND lifted_at IS NULL AND (expires_at IS NULL OR expires_at > ?) AND blocked_at >= ? ORDER BY ip",
+                [Block::SOURCE_TRAP, time(), $since],
+            );
+            foreach ($rows as $row) {
+                if (!str_contains((string) $row['ip'], '/')) {
+                    $ips[] = (string) $row['ip'];
+                }
+            }
+            return $ips;
+        });
+    }
+
     private function insertPattern(string $pattern, string $by): void
     {
         $this->execute(
@@ -240,8 +326,22 @@ final class PdoCentralStore implements CentralStore
 
     private function bumpVersion(): void
     {
+        $this->execute($this->incrementSql('version'), []);
+    }
+
+    /** One UPDATE, so two writers can never publish the same number. */
+    private function incrementSql(string $name): string
+    {
         $cast = $this->driver === 'mysql' ? 'CAST(CAST(value AS UNSIGNED) + 1 AS CHAR)' : 'CAST(CAST(value AS BIGINT) + 1 AS VARCHAR(255))';
-        $this->execute("UPDATE {$this->prefix}meta SET value = {$cast} WHERE name = 'version'", []);
+        return "UPDATE {$this->prefix}meta SET value = {$cast} WHERE name = '{$name}'";
+    }
+
+    /** An IP or a CIDR as Block stores it; anything else is used as given (it matches nothing). */
+    private static function target(string $value): string
+    {
+        $value = trim($value);
+        $normalized = str_contains($value, '/') ? Network::parse($value)?->cidr() : Rules::normalizeIp($value);
+        return $normalized ?? $value;
     }
 
     private function meta(string $name): ?string

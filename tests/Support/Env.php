@@ -55,7 +55,7 @@ final class Env
             Assert::markTestSkipped("{$prefix}DSN is not set; start docker compose and set it.");
         }
         $pdo = new \PDO(self::get($prefix . 'DSN'), self::get($prefix . 'USER'), self::get($prefix . 'PASSWORD'), [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
-        foreach (['block', 'pattern', 'allow', 'meta'] as $table) {
+        foreach (['block', 'pattern', 'allow', 'meta', 'list_entry'] as $table) {
             $pdo->exec('DROP TABLE IF EXISTS scanner_trap_' . $table);
         }
         return $pdo;
