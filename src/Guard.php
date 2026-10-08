@@ -14,6 +14,7 @@ final class Guard
      * @param list<string> $ownPaths
      * @param list<string>|null $fallbackPatterns used while the store has never stored patterns (no central store only)
      * @param list<string>|null $fallbackAllow used while the store has never stored a whitelist (no central store only)
+     * @param bool $recordEvents false without a central store: nobody would ever drain the events
      */
     public function __construct(
         private readonly LocalStore $store,
@@ -24,6 +25,7 @@ final class Guard
         private readonly ?array $fallbackPatterns = null,
         private readonly ?array $fallbackAllow = null,
         private readonly ?LoggerInterface $logger = null,
+        private readonly bool $recordEvents = true,
     ) {
     }
 
@@ -67,7 +69,7 @@ final class Guard
             Rules::patternType($pattern) === Rules::TYPE_CONTAINS ? $request->uri : $request->path(),
             $pattern,
             $request->userAgent,
-        ), true);
+        ), $this->recordEvents);
         if ($recorded) {
             $this->logger?->info('Scanner trap: {ip} blacklisted for {pattern}', ['ip' => $ip, 'pattern' => $pattern, 'uri' => $request->uri]);
         }

@@ -151,6 +151,7 @@ final class ScannerTrap
             $standalone ? $patterns : null,
             $standalone ? self::stringList($this->config, 'allow', []) : null,
             $this->logger(),
+            !$standalone,
         );
     }
 

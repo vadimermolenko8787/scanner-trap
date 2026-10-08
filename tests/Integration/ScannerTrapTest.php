@@ -139,6 +139,18 @@ final class ScannerTrapTest extends TestCase
         $this->assertNotSame([], (new PdoCentralStore($pdo))->patterns());
     }
 
+    public function test_events_are_kept_only_with_a_central_store(): void
+    {
+        $this->assertTrue(ScannerTrap::check($this->config(['blocking' => true]), self::SCANNER));
+        $this->assertSame([], (new FileLocalStore($this->dir . '/store'))->events(10));
+        $this->assertFileDoesNotExist($this->dir . '/store/events.log');
+
+        $config = $this->config(['blocking' => true, 'central' => Env::pdoConfig('sqlite', Env::pdo('sqlite'))]);
+        ScannerTrap::fromConfig($config)->manager()->install('test');
+        $this->assertTrue(ScannerTrap::check($config, ['REMOTE_ADDR' => '203.0.113.8'] + self::SCANNER));
+        $this->assertCount(1, (new FileLocalStore($this->dir . '/store'))->events(10));
+    }
+
     public function test_apcu_with_a_central_store_is_a_config_error(): void
     {
         $this->expectException(\InvalidArgumentException::class);
