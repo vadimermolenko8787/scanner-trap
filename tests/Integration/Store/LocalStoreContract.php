@@ -7,6 +7,7 @@ namespace ScannerTrap\Tests\Integration\Store;
 use PHPUnit\Framework\TestCase;
 use ScannerTrap\AllowEntry;
 use ScannerTrap\Block;
+use ScannerTrap\Escalation;
 use ScannerTrap\Store\LocalStore;
 
 /** Every LocalStore runs these. createStore() must return an empty store; called twice it returns two handles on one backend. */
@@ -210,6 +211,76 @@ abstract class LocalStoreContract extends TestCase
         $this->assertFalse($store->read('45.155.205.77')->blocked);
         $this->assertSame([], array_values(array_filter($store->blocks(), static fn (Block $b): bool => $b->isNetwork())));
         $this->assertTrue($store->addBlock(new Block('45.155.205.0/24', time(), time() + 60, source: 'subnet'), false));
+    }
+
+    private function hit(string $ip): Block
+    {
+        return new Block($ip, time(), time() + 600, 'web1', 'GET', '/.env', '/.env*', 'zgrab');
+    }
+
+    public function test_the_third_address_of_a_slash_24_blocks_the_network(): void
+    {
+        $store = $this->createStore();
+        $escalation = new Escalation('45.155.205.0/24', '4/24', 3, 86400);
+
+        $store->addBlock($this->hit('45.155.205.1'), true, $escalation);
+        $store->addBlock($this->hit('45.155.205.2'), true, $escalation);
+        $this->assertFalse($store->read('45.155.205.250')->blocked);
+
+        $store->addBlock($this->hit('45.155.205.3'), true, $escalation);
+        $snapshot = $this->createStore()->read('45.155.205.250');
+        $this->assertTrue($snapshot->blocked);
+        $this->assertSame('45.155.205.0/24', $snapshot->network);
+
+        $networks = array_values(array_filter($store->blocks(), static fn (Block $b): bool => $b->isNetwork()));
+        $this->assertCount(1, $networks);
+        $this->assertSame([Block::SOURCE_SUBNET, '/.env*', 'web1'], [$networks[0]->source, $networks[0]->pattern, $networks[0]->server]);
+        if ($this->keepsEvents()) {
+            $this->assertSame(['45.155.205.1', '45.155.205.2', '45.155.205.3', '45.155.205.0/24'], array_map(static fn (Block $b): string => $b->ip, array_values($store->events(10))));
+        }
+    }
+
+    public function test_one_address_counted_twice_is_still_one(): void
+    {
+        $store = $this->createStore();
+        $escalation = new Escalation('45.155.205.0/24', '4/24', 2, 86400);
+
+        $store->addBlock($this->hit('45.155.205.1'), false, $escalation);
+        $store->removeBlock('45.155.205.1');
+        $store->addBlock($this->hit('45.155.205.1'), false, $escalation);
+
+        $this->assertFalse($store->read('45.155.205.99')->blocked);
+    }
+
+    public function test_a_threshold_of_one_blocks_the_ipv6_slash_64_at_once(): void
+    {
+        $store = $this->createStore();
+
+        $store->addBlock($this->hit('2a01:4f8:c0c:1234::7'), false, new Escalation('2a01:4f8:c0c:1234::/64', '6/64', 1, 86400));
+
+        $this->assertSame('2a01:4f8:c0c:1234::/64', $store->read('2a01:4f8:c0c:1234:dead::1')->network);
+    }
+
+    public function test_hits_older_than_the_window_do_not_count(): void
+    {
+        $store = $this->createStore();
+        $escalation = new Escalation('45.155.205.0/24', '4/24', 2, 1);
+
+        $store->addBlock($this->hit('45.155.205.1'), false, $escalation);
+        sleep(2);
+        $store->addBlock($this->hit('45.155.205.2'), false, $escalation);
+
+        $this->assertFalse($store->read('45.155.205.99')->blocked);
+    }
+
+    public function test_without_an_escalation_nothing_is_counted(): void
+    {
+        $store = $this->createStore();
+        foreach (['45.155.205.1', '45.155.205.2', '45.155.205.3'] as $ip) {
+            $store->addBlock($this->hit($ip), false);
+        }
+
+        $this->assertFalse($store->read('45.155.205.99')->blocked);
     }
 
     protected function keepsEvents(): bool

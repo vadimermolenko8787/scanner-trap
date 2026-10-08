@@ -6,6 +6,7 @@ namespace ScannerTrap\Store;
 
 use ScannerTrap\AllowEntry;
 use ScannerTrap\Block;
+use ScannerTrap\Escalation;
 use ScannerTrap\Snapshot;
 
 /** This server's copy of the blacklist and lists; Guard reads it once per request. Every failure is a StoreException. */
@@ -17,8 +18,10 @@ interface LocalStore
     /**
      * Blocks $block->ip, an IP or a network, until $block->expiresAt (0 = forever) and, when $recordEvent, queues the block as
      * an event, both atomically: of several parallel calls for one IP exactly one returns true and queues an event.
+     * With $escalation, an IP block created here also counts its IP for the escalation network and blocks that network
+     * (source subnet, with its event) once the threshold is reached within the window.
      */
-    public function addBlock(Block $block, bool $recordEvent): bool;
+    public function addBlock(Block $block, bool $recordEvent, ?Escalation $escalation = null): bool;
 
     /** @return list<Block> the active blocks */
     public function blocks(): array;

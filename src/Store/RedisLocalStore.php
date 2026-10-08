@@ -6,6 +6,7 @@ namespace ScannerTrap\Store;
 
 use ScannerTrap\AllowEntry;
 use ScannerTrap\Block;
+use ScannerTrap\Escalation;
 use ScannerTrap\Exception\StoreException;
 use ScannerTrap\Network;
 use ScannerTrap\Redis\RedisConnection;
@@ -30,7 +31,7 @@ final class RedisLocalStore implements LocalStore
         end
         return reply
         LUA;
-    /** Of a scanner's parallel requests only the one whose SET created the key records an event. ARGV[5]: netlens token or ''. */
+    /** Of a scanner's parallel requests only the one whose SET created the key records an event. ARGV: 1 block JSON, 2 TTL, 3 record event, 4 stream cap, 5 netlens token or '', 6 escalate, 7 IP, 8 now, 9 window, 10 threshold, 11 network block JSON, 12 network TTL, 13 network token; KEYS 4 and 5 (counter, network key) only with escalation. */
     private const BLOCK_SCRIPT = <<<'LUA'
         local created
         if tonumber(ARGV[2]) > 0 then created = redis.call('SET', KEYS[1], ARGV[1], 'NX', 'EX', ARGV[2])
@@ -38,6 +39,20 @@ final class RedisLocalStore implements LocalStore
         if not created then return 0 end
         if ARGV[5] ~= '' then redis.call('SADD', KEYS[3], ARGV[5]) end
         if ARGV[3] == '1' then redis.call('XADD', KEYS[2], 'MAXLEN', '~', ARGV[4], '*', 'data', ARGV[1]) end
+        if ARGV[6] == '1' then
+            redis.call('ZADD', KEYS[4], ARGV[8], ARGV[7])
+            redis.call('ZREMRANGEBYSCORE', KEYS[4], '-inf', tonumber(ARGV[8]) - tonumber(ARGV[9]))
+            redis.call('EXPIRE', KEYS[4], ARGV[9])
+            if redis.call('ZCARD', KEYS[4]) >= tonumber(ARGV[10]) then
+                local net
+                if tonumber(ARGV[12]) > 0 then net = redis.call('SET', KEYS[5], ARGV[11], 'NX', 'EX', ARGV[12])
+                else net = redis.call('SET', KEYS[5], ARGV[11], 'NX') end
+                if net then
+                    redis.call('SADD', KEYS[3], ARGV[13])
+                    if ARGV[3] == '1' then redis.call('XADD', KEYS[2], 'MAXLEN', '~', ARGV[4], '*', 'data', ARGV[11]) end
+                end
+            end
+        end
         return 1
         LUA;
     private const UNLOCK_SCRIPT = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0";
@@ -69,17 +84,22 @@ final class RedisLocalStore implements LocalStore
         );
     }
 
-    public function addBlock(Block $block, bool $recordEvent): bool
+    public function addBlock(Block $block, bool $recordEvent, ?Escalation $escalation = null): bool
     {
-        if ($block->expiresAt !== 0 && $block->expiresAt <= time()) {
+        $now = time();
+        if ($block->expiresAt !== 0 && $block->expiresAt <= $now) {
             return false;
         }
-        $created = $this->redis->eval(
-            self::BLOCK_SCRIPT,
-            [$this->targetKey($block->ip), $this->key('events'), $this->key('netlens')],
-            [$this->json($block->toArray()), (string) $block->ttl(time()), $recordEvent ? '1' : '0', self::EVENTS_MAX_LENGTH, $block->isNetwork() ? (string) Network::parse($block->ip)?->token() : ''],
-        );
-        return $created === 1;
+        $keys = [$this->targetKey($block->ip), $this->key('events'), $this->key('netlens')];
+        $args = [$this->json($block->toArray()), (string) $block->ttl($now), $recordEvent ? '1' : '0', self::EVENTS_MAX_LENGTH, $block->isNetwork() ? (string) Network::parse($block->ip)?->token() : '', '0'];
+        if ($escalation !== null && !$block->isNetwork()) {
+            $network = Block::forNetwork($block, $escalation->network);
+            $keys[] = $this->key('seen:' . $escalation->network);
+            $keys[] = $this->key('net:' . $escalation->network);
+            $args[5] = '1';
+            array_push($args, $block->ip, (string) $now, (string) $escalation->window, (string) $escalation->threshold, $this->json($network->toArray()), (string) $network->ttl($now), $escalation->token);
+        }
+        return $this->redis->eval(self::BLOCK_SCRIPT, $keys, $args) === 1;
     }
 
     public function blocks(): array

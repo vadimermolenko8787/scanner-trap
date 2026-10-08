@@ -6,6 +6,7 @@ namespace ScannerTrap\Store;
 
 use ScannerTrap\AllowEntry;
 use ScannerTrap\Block;
+use ScannerTrap\Escalation;
 use ScannerTrap\Exception\StoreException;
 use ScannerTrap\Network;
 use ScannerTrap\Snapshot;
@@ -22,6 +23,7 @@ final class FileLocalStore implements LocalStore
 {
     private const BLOCKS = 'blocks';
     private const LOCKS = 'locks';
+    private const SEEN = 'seen';
     private const PATTERNS = 'patterns.json';
     private const ALLOW = 'allow.json';
     private const EVENTS = 'events.log';
@@ -53,7 +55,7 @@ final class FileLocalStore implements LocalStore
         return Snapshot::decode($network !== null || $this->isBlocked($ip), $this->cached(self::PATTERNS), $this->cached(self::ALLOW), $network);
     }
 
-    public function addBlock(Block $block, bool $recordEvent): bool
+    public function addBlock(Block $block, bool $recordEvent, ?Escalation $escalation = null): bool
     {
         if ($block->isNetwork()) {
             $created = $this->addNetworkBlock($block);
@@ -79,7 +81,40 @@ final class FileLocalStore implements LocalStore
         if ($recordEvent) {
             $this->appendEvent($block);
         }
+        if ($escalation !== null) {
+            $this->escalate($block, $escalation, $recordEvent);
+        }
         return true;
+    }
+
+    /** Counts the hit for its network under a per-network lock; the network block itself is created at most once. */
+    private function escalate(Block $block, Escalation $escalation, bool $recordEvent): void
+    {
+        $this->ensureDir($this->dir . '/' . self::SEEN);
+        $file = $this->dir . '/' . self::SEEN . '/' . sha1($escalation->network);
+        $handle = @fopen($file, 'c+');
+        if ($handle === false) {
+            throw new StoreException("Cannot open {$file}");
+        }
+        try {
+            flock($handle, LOCK_EX);
+            $seen = json_decode((string) stream_get_contents($handle), true);
+            $seen = is_array($seen) ? array_filter($seen, 'is_int') : [];
+            $seen[$block->ip] = $block->blockedAt;
+            $seen = array_filter($seen, static fn (int $at): bool => $at > time() - $escalation->window);
+            ftruncate($handle, 0);
+            rewind($handle);
+            fwrite($handle, $this->json($seen));
+        } finally {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+        }
+        if (count($seen) >= $escalation->threshold) {
+            $network = Block::forNetwork($block, $escalation->network);
+            if ($this->addNetworkBlock($network) && $recordEvent) {
+                $this->appendEvent($network);
+            }
+        }
     }
 
     public function blocks(): array

@@ -6,6 +6,7 @@ namespace ScannerTrap\Store;
 
 use ScannerTrap\AllowEntry;
 use ScannerTrap\Block;
+use ScannerTrap\Escalation;
 use ScannerTrap\Network;
 use ScannerTrap\Snapshot;
 
@@ -37,7 +38,7 @@ final class ApcuLocalStore implements LocalStore
         );
     }
 
-    public function addBlock(Block $block, bool $recordEvent): bool
+    public function addBlock(Block $block, bool $recordEvent, ?Escalation $escalation = null): bool
     {
         $key = $this->targetKey($block->ip);
         if (!$block->isActive(time())) {
@@ -50,6 +51,18 @@ final class ApcuLocalStore implements LocalStore
         $created = apcu_add($key, $this->json($block->toArray()), $block->ttl(time()));
         if ($created && $block->isNetwork()) {
             apcu_store($this->key('netlen:' . Network::parse($block->ip)?->token()), 1);
+        }
+        if ($created && $escalation !== null && !$block->isNetwork()) {
+            $seenKey = $this->key('seen:' . $escalation->network);
+            $seen = apcu_fetch($seenKey);
+            $seen = is_array($seen) ? array_filter($seen, 'is_int') : [];
+            $seen[$block->ip] = $block->blockedAt;
+            $seen = array_filter($seen, static fn (int $at): bool => $at > time() - $escalation->window);
+            // Read-modify-write: two racing hits may count as one, escalating one hit later
+            apcu_store($seenKey, $seen, $escalation->window);
+            if (count($seen) >= $escalation->threshold) {
+                $this->addBlock(Block::forNetwork($block, $escalation->network), false);
+            }
         }
         return $created;
     }

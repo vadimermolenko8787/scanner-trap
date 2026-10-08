@@ -9,6 +9,7 @@ final class Block
 {
     public const SOURCE_TRAP = 'trap';
     public const SOURCE_MANUAL = 'manual';
+    public const SOURCE_SUBNET = 'subnet';
     private const LIMITS = ['server' => 255, 'method' => 16, 'path' => 1024, 'pattern' => 255, 'userAgent' => 512, 'source' => 16];
 
     public readonly string $ip;
@@ -40,6 +41,12 @@ final class Block
         $this->pattern = self::text($pattern, self::LIMITS['pattern']);
         $this->userAgent = self::text($userAgent, self::LIMITS['userAgent']);
         $this->source = self::text($source, self::LIMITS['source']);
+    }
+
+    /** The block of $network that a hit escalated to: the same times and evidence, source subnet. */
+    public static function forNetwork(self $hit, string $network): self
+    {
+        return new self($network, $hit->blockedAt, $hit->expiresAt, $hit->server, $hit->method, $hit->path, $hit->pattern, $hit->userAgent, self::SOURCE_SUBNET);
     }
 
     /** True when the block covers a network (CIDR) rather than one address. */
