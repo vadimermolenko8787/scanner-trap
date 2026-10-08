@@ -106,6 +106,30 @@ class PhpRedisLocalStoreTest extends LocalStoreContract
         $this->assertNotSame($first, $second);
     }
 
+    public function test_concurrent_imports_of_one_source_leave_the_active_generation_intact(): void
+    {
+        for ($trial = 0; $trial < 5; $trial++) {
+            $this->redis->raw('FLUSHDB');
+            $startAt = sprintf('%.6F', microtime(true) + 0.5);
+            $processes = [];
+            for ($child = 0; $child < 2; $child++) {
+                $processes[] = proc_open([PHP_BINARY, __DIR__ . '/../../fixtures/import-list.php', '3000', $startAt], [1 => ['file', '/dev/null', 'w'], 2 => ['pipe', 'w']], $pipes);
+            }
+            foreach ($processes as $process) {
+                $this->assertIsResource($process);
+                proc_close($process);
+            }
+
+            $status = $this->redis->raw('HGET', 'scanner-trap:lists', 'big');
+            $this->assertIsString($status);
+            $info = json_decode($status, true);
+            $this->assertIsArray($info);
+            $this->assertIsInt($info['gen']);
+            $this->assertSame($info['count'], $this->redis->raw('HLEN', 'scanner-trap:lh:big:' . $info['gen']), "trial {$trial}");
+            $this->assertSame('big', $this->createStore()->read('45.5.7.1')->listed, "trial {$trial}");
+        }
+    }
+
     public function test_a_garbage_list_status_does_not_fail_the_read(): void
     {
         $store = $this->createStore();

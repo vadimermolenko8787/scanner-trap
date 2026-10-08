@@ -42,19 +42,28 @@ final class RedisLocalStore implements LocalStore
         end
         return reply
         LUA;
-    /** KEYS: lists, the new generation's hash. ARGV: source, status JSON ('' removes the source), prefix. */
+    /**
+     * KEYS: lists, the new generation's hash. ARGV: source, status JSON ('' removes the source), prefix, generation.
+     * Generations only grow: a switch to one that is not newer than the stored one frees its own hash and changes nothing.
+     */
     private const SWITCH_SCRIPT = <<<'LUA'
         local old = redis.call('HGET', KEYS[1], ARGV[1])
+        local oldGen
+        if old then
+            local ok, info = pcall(cjson.decode, old)
+            if ok and type(info) == 'table' and tonumber(info.gen) then oldGen = tonumber(info.gen) end
+        end
+        if oldGen and oldGen >= tonumber(ARGV[4]) then
+            redis.call('UNLINK', KEYS[2])
+            return 0
+        end
         if ARGV[2] == '' then
             redis.call('HDEL', KEYS[1], ARGV[1])
             redis.call('UNLINK', KEYS[2])
         else
             redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
         end
-        if old then
-            local oldKey = ARGV[3] .. 'lh:' .. ARGV[1] .. ':' .. cjson.decode(old).gen
-            if oldKey ~= KEYS[2] then redis.call('UNLINK', oldKey) end
-        end
+        if oldGen then redis.call('UNLINK', ARGV[3] .. 'lh:' .. ARGV[1] .. ':' .. string.format('%d', oldGen)) end
         return 1
         LUA;
     private const LIST_CHUNK = 5000;
@@ -201,10 +210,12 @@ final class RedisLocalStore implements LocalStore
         $lens = array_values(array_unique($wanted));
         sort($lens);
         $status = $wanted === [] ? '' : $this->json(['gen' => $generation, 'count' => count($wanted), 'at' => $at, 'lens' => $lens]);
-        $this->redis->eval(self::SWITCH_SCRIPT, [$this->key('lists'), $hash], [$source, $status, $this->prefix]);
-        // A crashed earlier import may have left a generation behind
-        foreach ($this->scanKeys($this->key("lh:{$source}:*")) as $key) {
-            if ($key !== $hash) {
+        $this->redis->eval(self::SWITCH_SCRIPT, [$this->key('lists'), $hash], [$source, $status, $this->prefix, (string) $generation]);
+        // A crashed earlier import may have left a generation behind; a newer one may be another import's active list
+        $stem = $this->key("lh:{$source}:");
+        foreach ($this->scanKeys($stem . '*') as $key) {
+            $older = substr($key, strlen($stem));
+            if (ctype_digit($older) && (int) $older < $generation) {
                 $this->redis->raw('UNLINK', $key);
             }
         }
