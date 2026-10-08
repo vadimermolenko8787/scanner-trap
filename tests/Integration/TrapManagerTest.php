@@ -382,6 +382,27 @@ final class TrapManagerTest extends TestCase
         $manager->block('45.155.0.0/16', '', null, 'ops');
     }
 
+    #[DataProvider('modes')]
+    public function test_a_download_that_parses_to_nothing_keeps_the_previous_entries(bool $central): void
+    {
+        $file = tempnam(sys_get_temp_dir(), 'list-');
+        copy(__DIR__ . '/../fixtures/lists/own.txt', (string) $file);
+        $manager = $this->manager($central, [['name' => 'own', 'file' => (string) $file]]);
+        $manager->install('ops');
+        $manager->import();
+        file_put_contents((string) $file, "<html><body>Access denied</body></html>\n");
+
+        try {
+            $report = $manager->import();
+        } finally {
+            @unlink((string) $file);
+        }
+
+        $this->assertStringContainsString('parsed to no networks', (string) $report['own']['error']);
+        $this->assertSame(1, $manager->lists()['own']['count']);
+        $this->assertSame('own', $this->local->read('185.220.101.9')->listed);
+    }
+
     public function test_a_failing_pull_keeps_the_import_outcome(): void
     {
         $real = new PdoCentralStore(Env::pdo('sqlite'));

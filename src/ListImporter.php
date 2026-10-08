@@ -25,6 +25,9 @@ final class ListImporter
             $body .= $this->fetch($location) . "\n";
         }
         $result = $this->parse($body, $source->format);
+        if ($result['networks'] === []) {
+            throw new StoreException("{$source->name} parsed to no networks; the previous entries stay");
+        }
         if (count($result['networks']) > self::MAX_ENTRIES) {
             throw new RefusedException(sprintf('%s lists more than %d networks; nothing was imported', $source->name, self::MAX_ENTRIES));
         }

@@ -49,6 +49,19 @@ final class ListImporterTest extends TestCase
         }
     }
 
+    public function test_a_download_without_any_network_is_a_store_exception(): void
+    {
+        $file = tempnam(sys_get_temp_dir(), 'list-');
+        file_put_contents((string) $file, "<html><body>Access denied</body></html>\n");
+        $this->expectException(StoreException::class);
+        $this->expectExceptionMessage('own parsed to no networks; the previous entries stay');
+        try {
+            (new ListImporter())->import(ListSource::fromConfig([['name' => 'own', 'file' => (string) $file]])[0]);
+        } finally {
+            @unlink((string) $file);
+        }
+    }
+
     public function test_more_than_the_limit_is_refused(): void
     {
         $lines = [];
