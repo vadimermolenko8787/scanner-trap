@@ -91,6 +91,7 @@ final class PdoCentralStore implements CentralStore
     public function insertBlocks(array $blocks): void
     {
         $this->transaction(function () use ($blocks): void {
+            $this->lock('version');
             foreach ($blocks as $block) {
                 $row = $this->row(
                     "SELECT id, expires_at FROM {$this->prefix}block WHERE ip = ? AND lifted_at IS NULL AND (expires_at IS NULL OR expires_at > ?) ORDER BY id LIMIT 1",
@@ -253,9 +254,7 @@ final class PdoCentralStore implements CentralStore
             }
         }
         return $this->transaction(function () use ($source, $wanted, $at): bool {
-            // A write first: a second import from another server waits here until this one commits, then reads its
-            // rows, instead of inserting the same rows (MySQL, PostgreSQL) or deadlocking (SQLite)
-            $this->execute("UPDATE {$this->prefix}meta SET value = value WHERE name = 'lists_version'", []);
+            $this->lock('lists_version');
             $current = [];
             // Row by row: a source of 200 000 entries must not also sit in memory as fetched rows
             $statement = $this->pdo->prepare("SELECT cidr FROM {$this->prefix}list_entry WHERE source = ?");
@@ -366,6 +365,16 @@ final class PdoCentralStore implements CentralStore
         $value = trim($value);
         $normalized = str_contains($value, '/') ? Network::parse($value)?->cidr() : Rules::normalizeIp($value);
         return $normalized ?? $value;
+    }
+
+    /**
+     * A write first in a transaction that reads before it writes: a second server doing the same waits here until
+     * this one commits, then reads its rows, instead of inserting the same rows (MySQL, PostgreSQL) or deadlocking
+     * (SQLite). The meta row only serves as the lock; its value stays.
+     */
+    private function lock(string $name): void
+    {
+        $this->execute("UPDATE {$this->prefix}meta SET value = value WHERE name = '{$name}'", []);
     }
 
     private function meta(string $name): ?string

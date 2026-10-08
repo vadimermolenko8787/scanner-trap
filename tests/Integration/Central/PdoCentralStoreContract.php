@@ -241,6 +241,31 @@ abstract class PdoCentralStoreContract extends TestCase
         }
     }
 
+    public function test_two_servers_pushing_the_same_blocks_at_once_store_each_once(): void
+    {
+        $this->installed();
+        $config = Env::pdoConfig($this->driver(), $this->pdo);
+        for ($trial = 0; $trial < 3; $trial++) {
+            $startAt = sprintf('%.6F', microtime(true) + 0.5);
+            $processes = [];
+            for ($child = 0; $child < 2; $child++) {
+                $process = proc_open([PHP_BINARY, __DIR__ . '/../../fixtures/block-central.php', $config['dsn'], $config['user'], $config['password'], '300', (string) $trial, $startAt], [1 => ['file', '/dev/null', 'w'], 2 => ['pipe', 'w']], $pipes);
+                $this->assertIsResource($process);
+                $processes[] = [$process, $pipes[2]];
+            }
+            foreach ($processes as [$process, $stderr]) {
+                $error = stream_get_contents($stderr);
+                $this->assertSame(0, proc_close($process), "trial {$trial}: {$error}");
+            }
+
+            $statement = $this->pdo->query("SELECT COUNT(*), COUNT(DISTINCT ip) FROM scanner_trap_block WHERE ip LIKE '45.{$trial}.%'");
+            $this->assertNotFalse($statement);
+            // fetchAll closes the cursor: an open one keeps SQLite's read lock and stalls the next trial's writers
+            // assertEquals: MySQL returns the counts as strings
+            $this->assertEquals([[300, 300]], $statement->fetchAll(\PDO::FETCH_NUM), "trial {$trial}");
+        }
+    }
+
     public function test_network_blocks_are_stored_lifted_and_filtered_like_ip_blocks(): void
     {
         $store = $this->installed();
