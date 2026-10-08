@@ -8,6 +8,7 @@ use Nyholm\Psr7\ServerRequest;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use ScannerTrap\RequestContext;
+use ScannerTrap\TrustedProxies;
 
 final class RequestContextTest extends TestCase
 {
@@ -31,6 +32,9 @@ final class RequestContextTest extends TestCase
             'trusted remote without a header' => ['10.0.0.2', '', self::PROXIES, null],
             'garbage remote' => ['nonsense', '', [], null],
             'empty remote' => ['', '198.51.100.1', self::PROXIES, null],
+            'behind cloudflare, the visitor is the rightmost untrusted hop' => ['173.245.48.1', '198.51.100.7, 203.0.113.9', TrustedProxies::CLOUDFLARE, '203.0.113.9'],
+            'cloudflare over ipv6' => ['2606:4700::1', '198.51.100.7, 203.0.113.9', TrustedProxies::CLOUDFLARE, '203.0.113.9'],
+            'reaching the origin directly, the header is ignored' => ['203.0.113.7', '198.51.100.7', TrustedProxies::CLOUDFLARE, '203.0.113.7'],
         ];
     }
 

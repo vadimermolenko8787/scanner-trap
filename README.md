@@ -215,7 +215,9 @@ from then on the stored lists apply.
   covering it are refused, and requests below it never match a path pattern.
 * **`trustedProxies`.** Behind a load balancer every request comes from the balancer's address: list its range, or the
   trap would blacklist your own balancer. Never list ranges you do not control; `X-Forwarded-For` is read only from
-  them, from the right.
+  them, from the right. Behind Cloudflare, use `'trustedProxies' => \ScannerTrap\TrustedProxies::CLOUDFLARE`, or spread
+  it with your own ranges (`[...\ScannerTrap\TrustedProxies::CLOUDFLARE, '10.0.0.0/8']`). The constant holds
+  Cloudflare's ranges as of its docblock date; a new release refreshes it.
 * **Cross-site requests** (`Sec-Fetch-Site: cross-site`) to a decoy are refused but never blacklist the visitor, so
   another site cannot lock your visitors out with an `<img>`.
 * **GET search forms.** A search box may legitimately send quote fragments such as `" or "`, or words such as
