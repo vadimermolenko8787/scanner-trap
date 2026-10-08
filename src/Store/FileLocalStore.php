@@ -334,9 +334,12 @@ final class FileLocalStore implements LocalStore
                     }
                 }
             }
+            $previous = trim((string) @file_get_contents($this->dir . '/' . self::NETWORKS));
             $name = 'networks-' . bin2hex(random_bytes(8)) . '.php';
             $this->writeAtomically($name, '<?php return ' . var_export($data, true) . ";\n");
             $this->writeAtomically(self::NETWORKS, $name);
+            // The previous file stops being current now: its 10 minutes start here, not when it was written
+            @touch($this->dir . '/' . $previous);
             $this->networksCache = null;
             foreach (glob($this->dir . '/networks-*.php') ?: [] as $old) {
                 if (basename($old) !== $name && (int) @filemtime($old) < time() - self::NETWORKS_KEEP) {

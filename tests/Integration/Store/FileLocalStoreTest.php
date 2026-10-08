@@ -143,4 +143,26 @@ final class FileLocalStoreTest extends LocalStoreContract
         file_put_contents($this->dir . '/networks-0123456789abcdef.php', '<?php syntax error');
         $this->assertTrue($this->createStore()->read('45.155.205.1')->corrupt);
     }
+
+    public function test_a_superseded_networks_file_is_kept_for_ten_minutes_after_it_stops_being_current(): void
+    {
+        $store = $this->createStore();
+        $store->addBlock(new Block('45.155.205.0/24', time(), 0, source: 'manual'), false);
+        $first = $this->dir . '/' . trim((string) file_get_contents($this->dir . '/networks.current'));
+        touch($first, time() - 3600);
+
+        $store->addBlock(new Block('91.92.248.0/22', time(), 0, source: 'manual'), false);
+        $second = $this->dir . '/' . trim((string) file_get_contents($this->dir . '/networks.current'));
+
+        $this->assertFileExists($first);
+        $this->assertNotSame($first, $second);
+
+        $stale = $this->dir . '/networks-0123456789abcdef.php';
+        file_put_contents($stale, '<?php return [];');
+        touch($stale, time() - 3600);
+        $store->addBlock(new Block('185.0.0.0/16', time(), 0, source: 'manual'), false);
+
+        $this->assertFileDoesNotExist($stale);
+        $this->assertFileExists($second);
+    }
 }
