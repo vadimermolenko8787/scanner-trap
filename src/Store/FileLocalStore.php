@@ -180,7 +180,7 @@ final class FileLocalStore implements LocalStore
 
     public function replaceList(string $source, array $networks, int $at): void
     {
-        if (preg_match('/^[a-z0-9-]{1,32}$/', $source) !== 1) {
+        if (preg_match('/^[a-z][a-z0-9-]{0,31}$/', $source) !== 1) {
             throw new \InvalidArgumentException("Not a list source name: {$source}");
         }
         $wanted = [];
@@ -208,11 +208,14 @@ final class FileLocalStore implements LocalStore
             }
             ksort($status);
             $this->writeAtomically(self::LISTS_DIR . '/status.json', $this->json($status));
-            $sources = [];
-            foreach (array_keys($status) as $name) {
-                $lines = @file($this->dir . '/' . self::LISTS_DIR . "/{$name}.txt", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-                $sources[$name] = $lines === false ? [] : $lines;
-            }
+            $dir = $this->dir . '/' . self::LISTS_DIR;
+            // One source's lines at a time
+            $sources = (static function () use ($status, $dir): \Generator {
+                foreach (array_keys($status) as $name) {
+                    $lines = @file("{$dir}/{$name}.txt", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+                    yield $name => $lines === false ? [] : $lines;
+                }
+            })();
             $previous = trim((string) @file_get_contents($this->dir . '/' . self::LISTS));
             $name = 'lists-' . bin2hex(random_bytes(8)) . '.bin';
             $this->writeAtomically($name, RangeFile::build($sources));

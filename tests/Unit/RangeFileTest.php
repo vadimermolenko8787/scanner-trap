@@ -82,4 +82,17 @@ final class RangeFileTest extends TestCase
         $this->expectException(StoreException::class);
         RangeFile::lookup($this->file, '45.155.205.9');
     }
+
+    public function test_building_200_000_networks_fits_a_small_memory_limit(): void
+    {
+        $process = proc_open(
+            [PHP_BINARY, '-d', 'memory_limit=96M', dirname(__DIR__) . '/fixtures/build_range_file.php'],
+            [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes,
+        );
+        $this->assertIsResource($process);
+        $output = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
+
+        $this->assertSame(0, proc_close($process), $output);
+    }
 }

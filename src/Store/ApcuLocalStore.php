@@ -125,6 +125,9 @@ final class ApcuLocalStore implements LocalStore
 
     public function replaceList(string $source, array $networks, int $at): void
     {
+        if (preg_match('/^[a-z][a-z0-9-]{0,31}$/', $source) !== 1) {
+            throw new \InvalidArgumentException("Not a list source name: {$source}");
+        }
         $wanted = [];
         foreach ($networks as $cidr) {
             $network = Network::parse($cidr);

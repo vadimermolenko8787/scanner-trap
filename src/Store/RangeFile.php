@@ -18,43 +18,57 @@ final class RangeFile
     private const MAGIC = 'STL1';
     private const HEADER = 16;
 
-    /** @param array<string, list<string>> $sources source name => CIDRs */
-    public static function build(array $sources): string
+    /**
+     * Each range is one packed string (start, end, source index), so 200 000 networks stay far below the default
+     * memory limit; the sources are consumed one at a time.
+     *
+     * @param iterable<string, iterable<string>> $sources source name => CIDRs
+     */
+    public static function build(iterable $sources): string
     {
-        $names = array_keys($sources);
-        /** @var array<int, list<array{string, string, int}>> $ranges */
-        $ranges = [4 => [], 6 => []];
-        foreach ($names as $index => $name) {
-            foreach ($sources[$name] as $cidr) {
+        $names = [];
+        $records = [4 => [], 6 => []];
+        foreach ($sources as $name => $cidrs) {
+            $index = count($names);
+            $names[] = (string) $name;
+            foreach ($cidrs as $cidr) {
                 $network = Network::parse($cidr);
                 if ($network !== null) {
                     [$start, $end] = $network->range();
-                    $ranges[$network->family][] = [$start, $end, $index];
+                    $records[$network->family][] = $start . $end . pack('n', $index);
                 }
             }
         }
         $counts = [];
         $body = '';
         foreach ([4, 6] as $family) {
-            $list = $ranges[$family];
-            // Stable since PHP 8.0: equal starts keep the order of the sources
-            usort($list, static fn (array $a, array $b): int => strcmp($a[0], $b[0]));
-            /** @var list<array{string, string, int}> $merged */
-            $merged = [];
-            foreach ($list as $range) {
-                $last = count($merged) - 1;
-                if ($last >= 0 && strcmp($range[0], $merged[$last][1]) <= 0) {
-                    if (strcmp($range[1], $merged[$last][1]) > 0) {
-                        $merged[$last] = [$merged[$last][0], $range[1], $merged[$last][2]];
+            $width = $family === 4 ? 4 : 16;
+            $list = $records[$family];
+            unset($records[$family]);
+            // The start comes first in a record: equal starts order by end, then by source index
+            sort($list, SORT_STRING);
+            $count = 0;
+            $open = null;
+            foreach ($list as $record) {
+                $start = substr($record, 0, $width);
+                $end = substr($record, $width, $width);
+                if ($open !== null && strcmp($start, substr($open, $width, $width)) <= 0) {
+                    if (strcmp($end, substr($open, $width, $width)) > 0) {
+                        $open = substr($open, 0, $width) . $end . substr($open, 2 * $width);
                     }
                     continue;
                 }
-                $merged[] = $range;
+                if ($open !== null) {
+                    $body .= $open;
+                    $count++;
+                }
+                $open = $record;
             }
-            $counts[$family] = count($merged);
-            foreach ($merged as [$start, $end, $index]) {
-                $body .= $start . $end . pack('n', $index);
+            if ($open !== null) {
+                $body .= $open;
+                $count++;
             }
+            $counts[$family] = $count;
         }
         $json = (string) json_encode($names);
         return self::MAGIC . pack('NNN', $counts[4], $counts[6], strlen($json)) . $json . $body;

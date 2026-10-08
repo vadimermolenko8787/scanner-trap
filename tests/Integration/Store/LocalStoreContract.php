@@ -363,4 +363,17 @@ abstract class LocalStoreContract extends TestCase
         $store->saveMarker('abc', 3, 9);
         $this->assertSame(['owner' => 'abc', 'version' => 3, 'listsVersion' => 9], $this->createStore()->marker());
     }
+
+    public function test_a_source_name_must_be_a_plain_word(): void
+    {
+        $store = $this->createStore();
+        foreach (['2024', 'a*b'] as $name) {
+            try {
+                $store->replaceList($name, ['45.155.205.0/24'], 1000);
+                $this->fail("Accepted {$name}");
+            } catch (\InvalidArgumentException) {
+                $this->assertNull($store->read('45.155.205.1')->listed);
+            }
+        }
+    }
 }

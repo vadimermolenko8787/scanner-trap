@@ -30,11 +30,13 @@ final class RedisLocalStore implements LocalStore
         end
         local lists = redis.call('HGETALL', KEYS[5])
         for j = 1, #lists, 2 do
-            local info = cjson.decode(lists[j + 1])
-            local key = ARGV[1] .. 'lh:' .. lists[j] .. ':' .. info.gen
-            for _, token in ipairs(info.lens) do
-                local cidr = candidates[token]
-                if cidr and redis.call('HEXISTS', key, cidr) == 1 then reply[5] = lists[j] break end
+            local ok, info = pcall(cjson.decode, lists[j + 1])
+            if ok and type(info) == 'table' and type(info.lens) == 'table' and info.gen then
+                local key = ARGV[1] .. 'lh:' .. lists[j] .. ':' .. info.gen
+                for _, token in ipairs(info.lens) do
+                    local cidr = candidates[token]
+                    if cidr and redis.call('HEXISTS', key, cidr) == 1 then reply[5] = lists[j] break end
+                end
             end
             if reply[5] then break end
         end
@@ -176,6 +178,9 @@ final class RedisLocalStore implements LocalStore
     /** No command holds Redis for long: the new generation is written in chunks, then switched to in one short script. */
     public function replaceList(string $source, array $networks, int $at): void
     {
+        if (preg_match('/^[a-z][a-z0-9-]{0,31}$/', $source) !== 1) {
+            throw new \InvalidArgumentException("Not a list source name: {$source}");
+        }
         $wanted = [];
         foreach ($networks as $cidr) {
             $network = Network::parse($cidr);

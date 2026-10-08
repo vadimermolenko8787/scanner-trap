@@ -105,4 +105,18 @@ class PhpRedisLocalStoreTest extends LocalStoreContract
         $this->assertCount(1, $second);
         $this->assertNotSame($first, $second);
     }
+
+    public function test_a_garbage_list_status_does_not_fail_the_read(): void
+    {
+        $store = $this->createStore();
+        $store->addBlock(new Block('45.155.205.9', time(), 0, source: 'manual'), false);
+        $store->replaceLists(['/wp-admin'], []);
+        $this->redis->raw('HSET', 'scanner-trap:lists', 'broken', 'not json', 'odd', '[1]');
+
+        $snapshot = $store->read('45.155.205.9');
+        $this->assertTrue($snapshot->blocked);
+        $this->assertFalse($snapshot->corrupt);
+        $this->assertNull($snapshot->listed);
+        $this->assertNotSame([], $snapshot->patterns);
+    }
 }
