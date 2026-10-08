@@ -67,6 +67,16 @@ final class CliTest extends TestCase
         $this->assertSame("/.env*\n~union select\n", $this->cli($config, 'pattern:list')[1]);
     }
 
+    public function test_install_refuses_an_invalid_config_pattern(): void
+    {
+        $this->writeConfig(['patterns' => ['/', '/.env*']]);
+
+        [$code, , $err] = $this->cli('install');
+
+        $this->assertSame(2, $code);
+        $this->assertStringContainsString('"/"', $err);
+    }
+
     public function test_refusals_exit_with_2_and_say_why(): void
     {
         $this->writeConfig();

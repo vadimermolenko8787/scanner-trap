@@ -38,7 +38,18 @@ final class TrapManager
     public function install(string $by): void
     {
         $this->assertManageable();
-        $patterns = array_values(array_unique(array_map(Rules::normalizePattern(...), $this->configPatterns)));
+        $patterns = [];
+        $problems = [];
+        foreach ($this->configPatternErrors() as $pattern => $error) {
+            if ($error === null) {
+                $patterns[] = $pattern;
+            } else {
+                $problems[] = "\"{$pattern}\": {$error}";
+            }
+        }
+        if ($problems !== []) {
+            throw new RefusedException("The config's patterns are invalid, nothing was installed:\n" . implode("\n", $problems));
+        }
         $allow = $this->configAllowEntries($by);
         if ($this->central !== null) {
             $this->central->install($patterns, $allow, $by);
@@ -213,7 +224,18 @@ final class TrapManager
     /** @return list<string> the stored list, or the config's while none is stored (Decision 1) */
     private function localPatterns(): array
     {
-        return $this->local->patterns() ?? array_values(array_unique(array_map(Rules::normalizePattern(...), $this->configPatterns)));
+        return $this->local->patterns() ?? array_keys(array_filter($this->configPatternErrors(), static fn (?string $error): bool => $error === null));
+    }
+
+    /** @return array<string, ?string> each distinct normalized config pattern with the reason it is invalid, or null */
+    private function configPatternErrors(): array
+    {
+        $errors = [];
+        foreach ($this->configPatterns as $pattern) {
+            $pattern = Rules::normalizePattern($pattern);
+            $errors[$pattern] = Rules::patternError($pattern, $this->ownPaths);
+        }
+        return $errors;
     }
 
     /** @return list<AllowEntry> */

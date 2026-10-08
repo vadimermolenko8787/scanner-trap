@@ -10,6 +10,7 @@ use ScannerTrap\AllowEntry;
 use ScannerTrap\Block;
 use ScannerTrap\Central\PdoCentralStore;
 use ScannerTrap\Exception\RefusedException;
+use ScannerTrap\Exception\StoreException;
 use ScannerTrap\Guard;
 use ScannerTrap\RequestContext;
 use ScannerTrap\Store\ApcuLocalStore;
@@ -78,6 +79,35 @@ final class TrapManagerTest extends TestCase
         $this->assertSame(self::CONFIG_PATTERNS, $manager->patterns());
         $manager->addPattern('/.git', 'ops');
         $this->assertSame(['/.env*', '*.sql', '/.git'], $this->local->patterns());
+    }
+
+    #[DataProvider('modes')]
+    public function test_install_refuses_invalid_config_patterns_and_writes_nothing(bool $central): void
+    {
+        $manager = new TrapManager($this->local, $central ? ($this->central = new PdoCentralStore(Env::pdo('sqlite'))) : null, ['/', '/.env*', '*.js'], [], ['/admin']);
+
+        try {
+            $manager->install('ops');
+            $this->fail('install must refuse');
+        } catch (RefusedException $e) {
+            $this->assertStringContainsString('"/"', $e->getMessage());
+            $this->assertStringContainsString('"*.js"', $e->getMessage());
+            $this->assertStringNotContainsString('.env', $e->getMessage());
+        }
+        $this->assertNull($this->local->patterns());
+        if ($central) {
+            $this->expectException(StoreException::class); // not even the tables exist
+            $this->central?->patterns();
+        }
+    }
+
+    public function test_before_install_invalid_config_patterns_are_left_out_of_the_local_lists(): void
+    {
+        $manager = new TrapManager($this->local, null, ['/', '/.env*', '*.js'], [], ['/admin']);
+
+        $this->assertSame(['/.env*'], $manager->patterns());
+        $manager->addPattern('/.git', 'ops');
+        $this->assertSame(['/.env*', '/.git'], $this->local->patterns());
     }
 
     #[DataProvider('modes')]
