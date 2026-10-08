@@ -238,11 +238,12 @@ final class ScannerTrap
         $port = is_int($local['port'] ?? null) ? $local['port'] : 6379;
         $database = is_int($local['database'] ?? null) ? $local['database'] : 0;
         $password = is_string($local['password'] ?? null) ? $local['password'] : null;
+        $persistent = ($local['persistent'] ?? false) === true;
         if (extension_loaded('redis')) {
-            return PhpRedisConnection::connect($host, $port, $database, $password, self::REQUEST_TIMEOUT, $readTimeout);
+            return PhpRedisConnection::connect($host, $port, $database, $password, self::REQUEST_TIMEOUT, $readTimeout, $persistent);
         }
         if (class_exists(\Predis\Client::class)) {
-            return PredisConnection::connect($host, $port, $database, $password, self::REQUEST_TIMEOUT, $readTimeout);
+            return PredisConnection::connect($host, $port, $database, $password, self::REQUEST_TIMEOUT, $readTimeout, $persistent);
         }
         throw new \InvalidArgumentException('A Redis store needs ext-redis or predis/predis');
     }

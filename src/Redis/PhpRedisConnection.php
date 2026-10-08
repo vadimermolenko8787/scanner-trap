@@ -24,18 +24,21 @@ final class PhpRedisConnection implements RedisConnection
         return new self(static fn (): \Redis => $redis);
     }
 
-    public static function connect(string $host, int $port, int $database, ?string $password, float $timeout, float $readTimeout): self
+    public static function connect(string $host, int $port, int $database, ?string $password, float $timeout, float $readTimeout, bool $persistent = false): self
     {
-        return new self(static function () use ($host, $port, $database, $password, $timeout, $readTimeout): \Redis {
+        return new self(static function () use ($host, $port, $database, $password, $timeout, $readTimeout, $persistent): \Redis {
             $redis = new \Redis();
             try {
-                if (!$redis->connect($host, $port, $timeout, null, 0, $readTimeout)) {
+                $connected = $persistent
+                    ? $redis->pconnect($host, $port, $timeout, 'scanner-trap', 0, $readTimeout)
+                    : $redis->connect($host, $port, $timeout, null, 0, $readTimeout);
+                if (!$connected) {
                     throw new StoreException("Redis unreachable at {$host}:{$port}");
                 }
                 if ($password !== null && $password !== '') {
                     $redis->auth($password);
                 }
-                if ($database !== 0) {
+                if ($database !== 0 || $persistent) { // a pooled connection may still be on another database
                     $redis->select($database);
                 }
             } catch (\RedisException $e) {
@@ -43,11 +46,6 @@ final class PhpRedisConnection implements RedisConnection
             }
             return $redis;
         });
-    }
-
-    public function eval(string $script, array $keys, array $args): mixed
-    {
-        return $this->raw('EVAL', $script, (string) count($keys), ...$keys, ...$args);
     }
 
     public function raw(string ...$args): mixed

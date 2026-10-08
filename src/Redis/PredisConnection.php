@@ -15,18 +15,16 @@ final class PredisConnection implements RedisConnection
     {
     }
 
-    public static function connect(string $host, int $port, int $database, ?string $password, float $timeout, float $readTimeout): self
+    public static function connect(string $host, int $port, int $database, ?string $password, float $timeout, float $readTimeout, bool $persistent = false): self
     {
         $parameters = ['scheme' => 'tcp', 'host' => $host, 'port' => $port, 'database' => $database, 'timeout' => $timeout, 'read_write_timeout' => $readTimeout];
         if ($password !== null && $password !== '') {
             $parameters['password'] = $password;
         }
+        if ($persistent) {
+            $parameters['persistent'] = true;
+        }
         return new self(new Client($parameters));
-    }
-
-    public function eval(string $script, array $keys, array $args): mixed
-    {
-        return $this->raw('EVAL', $script, (string) count($keys), ...$keys, ...$args);
     }
 
     public function raw(string ...$args): mixed

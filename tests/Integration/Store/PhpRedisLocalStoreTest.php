@@ -37,6 +37,56 @@ class PhpRedisLocalStoreTest extends LocalStoreContract
         return new RedisLocalStore($this->connect());
     }
 
+    /** @return array{RedisConnection, \ArrayObject<int, string>} a connection that records each command's name */
+    private function recording(): array
+    {
+        $commands = new \ArrayObject();
+        $inner = $this->connect();
+        $connection = new class ($inner, $commands) implements RedisConnection {
+            /** @param \ArrayObject<int, string> $commands */
+            public function __construct(private readonly RedisConnection $inner, private readonly \ArrayObject $commands)
+            {
+            }
+
+            public function raw(string ...$args): mixed
+            {
+                $this->commands[] = $args[0];
+                return $this->inner->raw(...$args);
+            }
+        };
+        return [$connection, $commands];
+    }
+
+    public function test_a_script_is_sent_by_its_hash_once_redis_holds_it(): void
+    {
+        [$connection, $commands] = $this->recording();
+        $store = new RedisLocalStore($connection);
+        $this->redis->raw('SCRIPT', 'FLUSH');
+
+        $store->read('203.0.113.7');
+        $this->assertSame(['EVALSHA', 'EVAL'], $commands->getArrayCopy());
+
+        $commands->exchangeArray([]);
+        $store->read('203.0.113.7');
+        $this->assertSame(['EVALSHA'], $commands->getArrayCopy());
+    }
+
+    public function test_an_error_other_than_noscript_is_not_retried(): void
+    {
+        [$connection, $commands] = $this->recording();
+        $store = new RedisLocalStore($connection);
+        $store->read('203.0.113.7'); // Redis now holds the script: the next error is the script's own
+        $commands->exchangeArray([]);
+        $this->redis->raw('SET', 'scanner-trap:netlens', 'a string, not a set');
+
+        try {
+            $store->read('203.0.113.7');
+            $this->fail('No exception');
+        } catch (StoreException) {
+            $this->assertSame(['EVALSHA'], $commands->getArrayCopy());
+        }
+    }
+
     public function test_keys_are_the_specs_and_carry_the_prefix(): void
     {
         $store = $this->createStore();

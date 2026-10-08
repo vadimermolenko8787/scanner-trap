@@ -192,7 +192,7 @@ they are never blacklisted:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `local` | required | `['type' => 'redis', 'host', 'port', 'database', 'password', 'prefix']`, `['type' => 'file', 'dir' => …]` or `['type' => 'apcu']` |
+| `local` | required | `['type' => 'redis', 'host', 'port', 'database', 'password', 'prefix', 'persistent' => true]`, `['type' => 'file', 'dir' => …]` or `['type' => 'apcu']`. `persistent` reuses the connection across requests; recommended for a remote Redis; ignored with `client` |
 | `central` | `null` | `['dsn' => …, 'user' => …, 'password' => …, 'tablePrefix' => 'scanner_trap_']` |
 | `serverName` | `gethostname()` | recorded with every block |
 | `blocking` | `false` | refuse blacklisted IPs; `false` only records them |

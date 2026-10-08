@@ -16,6 +16,7 @@ All notable changes to this project are documented here. The project follows [Se
 * `block` and `unblock` accept a CIDR.
 * `scanner-trap prune` drops old central history and the file store's leftovers.
 * Sync pulls only the blocks and lifts made since the previous run, with a full reconciliation once an hour.
+* Redis scripts run by their hash (`EVALSHA`); `'persistent' => true` keeps the Redis connection across requests.
 
 ### Changed
 * The six SQL fragments that search text can contain (`' or '`, `' and '`, `" or "`, `" and "`, `sleep(`, `benchmark(`) moved from `DefaultPatterns::LIST` to `DefaultPatterns::LOOSE_FRAGMENTS`. A stored pattern list keeps them until `scanner-trap pattern:remove`.

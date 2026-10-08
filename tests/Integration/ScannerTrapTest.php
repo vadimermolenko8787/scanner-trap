@@ -11,6 +11,7 @@ use ScannerTrap\RequestContext;
 use ScannerTrap\Snapshot;
 use ScannerTrap\Store\LocalStore;
 use ScannerTrap\Central\PdoCentralStore;
+use ScannerTrap\Redis\PhpRedisConnection;
 use ScannerTrap\ScannerTrap;
 use ScannerTrap\Store\FileLocalStore;
 use ScannerTrap\Tests\Support\Env;
@@ -118,13 +119,37 @@ final class ScannerTrapTest extends TestCase
             $redis->connect(Env::get('SCANNER_TRAP_REDIS_HOST'), (int) Env::get('SCANNER_TRAP_REDIS_PORT'));
             $redis->select(Env::redisDatabase());
             $redis->setOption(\Redis::OPT_PREFIX, 'project:');
-            $this->assertTrue(ScannerTrap::check(['local' => ['type' => 'redis', 'client' => $redis], 'blocking' => true], self::SCANNER));
+            $this->assertTrue(ScannerTrap::check(['local' => ['type' => 'redis', 'client' => $redis, 'persistent' => true], 'blocking' => true], self::SCANNER));
             $this->assertSame(1, Env::phpRedis()->raw('EXISTS', 'scanner-trap:block:203.0.113.7'));
         }
         $predis = new \Predis\Client(['host' => Env::get('SCANNER_TRAP_REDIS_HOST'), 'port' => (int) Env::get('SCANNER_TRAP_REDIS_PORT'), 'database' => Env::redisDatabase()]);
-        $this->assertTrue(ScannerTrap::check(['local' => ['type' => 'redis', 'client' => $predis, 'prefix' => 'p:'], 'blocking' => true], self::SCANNER));
+        $this->assertTrue(ScannerTrap::check(['local' => ['type' => 'redis', 'client' => $predis, 'persistent' => true, 'prefix' => 'p:'], 'blocking' => true], self::SCANNER));
         $this->assertSame(1, Env::phpRedis()->raw('EXISTS', 'p:block:203.0.113.7'));
         Env::phpRedis()->raw('FLUSHDB');
+    }
+
+    public function test_a_persistent_redis_connection_reads_and_blocks(): void
+    {
+        Env::phpRedis()->raw('FLUSHDB');
+        $config = ['local' => Env::redisConfig() + ['persistent' => true], 'blocking' => true];
+
+        $this->assertTrue(ScannerTrap::check($config, self::SCANNER));
+        $this->assertTrue(ScannerTrap::check($config, ['REMOTE_ADDR' => '203.0.113.7', 'REQUEST_URI' => '/']));
+        Env::phpRedis()->raw('FLUSHDB');
+    }
+
+    public function test_a_persistent_connection_to_database_0_selects_it_after_another_database_used_the_pool(): void
+    {
+        $host = Env::get('SCANNER_TRAP_REDIS_HOST');
+        $port = (int) Env::get('SCANNER_TRAP_REDIS_PORT');
+        $other = PhpRedisConnection::connect($host, $port, Env::redisDatabase(), null, 2.0, 2.0, true);
+        $other->raw('PING');
+        unset($other); // hands the pooled connection back, still on the configured database
+
+        $own = PhpRedisConnection::connect($host, $port, 0, null, 2.0, 2.0, true);
+
+        $this->assertIsString($info = $own->raw('CLIENT', 'INFO'));
+        $this->assertStringContainsString(' db=0 ', $info);
     }
 
     public function test_with_a_central_store_an_empty_local_store_blocks_nobody(): void

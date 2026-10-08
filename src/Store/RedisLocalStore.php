@@ -12,7 +12,7 @@ use ScannerTrap\Network;
 use ScannerTrap\Redis\RedisConnection;
 use ScannerTrap\Snapshot;
 
-/** Keys {prefix}block:<ip>, net:<cidr>, netlens (set of prefix tokens), lh:<source>:<generation> (list entries), lists (source => status), lists:seq, patterns, allow, events (stream), owner, sync-lock. One EVAL per request. */
+/** Keys {prefix}block:<ip>, net:<cidr>, netlens (set of prefix tokens), lh:<source>:<generation> (list entries), lists (source => status), lists:seq, patterns, allow, events (stream), owner, sync-lock. One script call per request. */
 final class RedisLocalStore implements LocalStore
 {
     private const EVENTS_MAX_LENGTH = '10000';
@@ -106,7 +106,7 @@ final class RedisLocalStore implements LocalStore
             $args[] = $token;
             $args[] = $cidr;
         }
-        $reply = $this->redis->eval(self::READ_SCRIPT, [$this->key('block:' . $ip), $this->key('patterns'), $this->key('allow'), $this->key('netlens'), $this->key('lists')], $args);
+        $reply = $this->script(self::READ_SCRIPT, [$this->key('block:' . $ip), $this->key('patterns'), $this->key('allow'), $this->key('netlens'), $this->key('lists')], $args);
         if (!is_array($reply) || count($reply) !== 5) {
             throw new StoreException('Unexpected reply to the read script');
         }
@@ -135,7 +135,7 @@ final class RedisLocalStore implements LocalStore
             $args[5] = '1';
             array_push($args, $block->ip, (string) $now, (string) $escalation->window, (string) $escalation->threshold, $this->json($network->toArray()), (string) $network->ttl($now), $escalation->token);
         }
-        return $this->redis->eval(self::BLOCK_SCRIPT, $keys, $args) === 1;
+        return $this->script(self::BLOCK_SCRIPT, $keys, $args) === 1;
     }
 
     public function blocks(): array
@@ -211,7 +211,7 @@ final class RedisLocalStore implements LocalStore
         $lens = array_values(array_unique($wanted));
         sort($lens);
         $status = $wanted === [] ? '' : $this->json(['gen' => $generation, 'count' => count($wanted), 'at' => $at, 'lens' => $lens]);
-        $this->redis->eval(self::SWITCH_SCRIPT, [$this->key('lists'), $hash], [$source, $status, $this->prefix, (string) $generation]);
+        $this->script(self::SWITCH_SCRIPT, [$this->key('lists'), $hash], [$source, $status, $this->prefix, (string) $generation]);
         // A crashed earlier import may have left a generation behind; a newer one may be another import's active list
         $stem = $this->key("lh:{$source}:");
         foreach ($this->scanKeys($stem . '*') as $key) {
@@ -317,7 +317,7 @@ final class RedisLocalStore implements LocalStore
     public function unlock(): void
     {
         if ($this->lockToken !== null) {
-            $this->redis->eval(self::UNLOCK_SCRIPT, [$this->key('sync-lock')], [$this->lockToken]);
+            $this->script(self::UNLOCK_SCRIPT, [$this->key('sync-lock')], [$this->lockToken]);
             $this->lockToken = null;
         }
     }
@@ -341,6 +341,25 @@ final class RedisLocalStore implements LocalStore
     private function targetKey(string $target): string
     {
         return $this->key((str_contains($target, '/') ? 'net:' : 'block:') . $target);
+    }
+
+    /**
+     * Runs a script by its hash, so the body crosses the network only when Redis does not hold it yet (after a restart or
+     * SCRIPT FLUSH).
+     *
+     * @param list<string> $keys
+     * @param list<string> $args
+     */
+    private function script(string $script, array $keys, array $args): mixed
+    {
+        try {
+            return $this->redis->raw('EVALSHA', sha1($script), (string) count($keys), ...$keys, ...$args);
+        } catch (StoreException $e) {
+            if (!str_contains($e->getMessage(), 'NOSCRIPT')) {
+                throw $e;
+            }
+            return $this->redis->raw('EVAL', $script, (string) count($keys), ...$keys, ...$args);
+        }
     }
 
     private function key(string $name): string
