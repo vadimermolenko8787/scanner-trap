@@ -56,6 +56,10 @@ final class SignatureTest extends TestCase
             'part of a browser token' => ['@ozill', false],
             'bot' => ['@bot', false],
             'gecko' => ['@gecko', false],
+            'a browser token with a slash' => ['@mozilla/5.0', false],
+            'a browser phrase' => ['@like gecko', false],
+            'a browser engine note' => ['@(khtml, like gecko)', false],
+            'a platform note' => ['@win64; x64', false],
             'empty' => ['@', false],
         ];
     }
