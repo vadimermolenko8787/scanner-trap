@@ -98,7 +98,7 @@ final class TrapManager
             $allowed = Network::parse($entry);
             $covers = $network === null
                 ? Rules::isAllowed($target, [$entry])
-                : ($allowed !== null ? $network->overlaps($allowed) : Rules::isAllowed($network->address, [$entry]));
+                : $network->overlaps($allowed ?? self::maskNetwork($entry) ?? $network);
             if ($covers) {
                 throw new RefusedException("{$target} covers the whitelist entry {$entry}, which wins over any block; remove the entry first");
             }
@@ -252,16 +252,25 @@ final class TrapManager
                 $report[$list->name] = ['networks' => 0, 'invalid' => 0, 'reserved' => 0, 'tooWide' => 0, 'error' => $e->getMessage()];
             }
         }
-        if ($source === null) {
-            $configured = array_map(static fn (ListSource $s): string => $s->name, $this->listSources);
-            foreach (array_keys($this->storedListStatus()) as $stale) {
-                if (!in_array($stale, $configured, true)) {
-                    $this->replaceList((string) $stale, []);
+        try {
+            if ($source === null) {
+                $configured = array_map(static fn (ListSource $s): string => $s->name, $this->listSources);
+                foreach (array_keys($this->storedListStatus()) as $stale) {
+                    if (!in_array($stale, $configured, true)) {
+                        $this->replaceList((string) $stale, []);
+                    }
                 }
             }
-        }
-        if ($this->central !== null) {
-            $this->syncer()->pull();
+            if ($this->central !== null) {
+                $this->syncer()->pull();
+            }
+        } catch (StoreException $e) {
+            $outcomes = [];
+            foreach ($report as $name => $row) {
+                $outcomes[] = $row['error'] === null ? "{$name}: {$row['networks']} networks" : "{$name}: failed: {$row['error']}";
+            }
+            throw new StoreException('The import ran (' . implode('; ', $outcomes) . ') but finishing it failed: ' . $e->getMessage()
+                . ($this->central !== null ? '. The central store was written; the next sync applies it' : ''), 0, $e);
         }
         return $report;
     }
@@ -295,6 +304,17 @@ final class TrapManager
     private function storedListStatus(): array
     {
         return $this->central !== null ? $this->central->listStatus() : $this->local->listStatus();
+    }
+
+    /** The network of a whitelist mask's octets before the first `*` (a.b.*.* is a.b.0.0/16), null when it is no IPv4 mask. */
+    private static function maskNetwork(string $mask): ?Network
+    {
+        $octets = explode('.', $mask);
+        if (count($octets) !== 4) {
+            return null;
+        }
+        $fixed = array_slice($octets, 0, (int) array_search('*', $octets, true));
+        return Network::parse(implode('.', array_pad($fixed, 4, '0')) . '/' . 8 * count($fixed));
     }
 
     /** An IP or a CIDR as Block stores it, null for anything else. */

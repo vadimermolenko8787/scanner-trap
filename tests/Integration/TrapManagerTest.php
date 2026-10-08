@@ -8,6 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use ScannerTrap\AllowEntry;
 use ScannerTrap\Block;
+use ScannerTrap\Central\CentralStore;
 use ScannerTrap\Central\PdoCentralStore;
 use ScannerTrap\Exception\RefusedException;
 use ScannerTrap\Exception\StoreException;
@@ -357,5 +358,48 @@ final class TrapManagerTest extends TestCase
 
         $this->expectException(RefusedException::class);
         $this->manager(false)->import();
+    }
+
+    #[DataProvider('modes')]
+    public function test_a_network_covering_a_whitelist_mask_or_cidr_is_refused(bool $central): void
+    {
+        $manager = $this->installed($central);
+        $manager->addAllow('45.155.205.*', '', null, 'ops');
+
+        $this->assertSame('91.92.248.0/22', $manager->block('91.92.248.0/22', '', null, 'ops')->ip);
+        try {
+            $manager->block('45.155.0.0/16', '', null, 'ops');
+            $this->fail('a network covering a whitelisted mask must be refused');
+        } catch (RefusedException $e) {
+            $this->assertStringContainsString('whitelist', $e->getMessage());
+        }
+
+        $manager->removeAllow('45.155.205.*');
+        $manager->addAllow('45.155.205.0/24', '', null, 'ops');
+        $this->expectException(RefusedException::class);
+        $this->expectExceptionMessage('whitelist');
+        $manager->block('45.155.0.0/16', '', null, 'ops');
+    }
+
+    public function test_a_failing_pull_keeps_the_import_outcome(): void
+    {
+        $real = new PdoCentralStore(Env::pdo('sqlite'));
+        $central = $this->createMock(CentralStore::class);
+        foreach ((new \ReflectionClass(CentralStore::class))->getMethods() as $method) {
+            $name = $method->getName();
+            $central->method($name)->willReturnCallback(
+                static fn (mixed ...$args): mixed => $name === 'listEntries' ? throw new StoreException('db gone') : $real->$name(...$args),
+            );
+        }
+        $manager = new TrapManager($this->local, $central, self::CONFIG_PATTERNS, self::CONFIG_ALLOW, [], 'web1', 600, null, null, ListSource::fromConfig([['name' => 'own', 'file' => __DIR__ . '/../fixtures/lists/own.txt']]));
+        $manager->install('ops');
+
+        try {
+            $manager->import();
+            $this->fail('the failing pull must surface');
+        } catch (StoreException $e) {
+            $this->assertStringContainsString('own', $e->getMessage());
+            $this->assertStringContainsString('next sync', $e->getMessage());
+        }
     }
 }
