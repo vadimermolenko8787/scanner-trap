@@ -85,8 +85,10 @@ with its own worker can call `ScannerTrap::fromConfig($config)->manager()->sync(
 | `install` | central database: tables, owner id, seeded lists; otherwise the config's lists into the local store |
 | `sync [--watch=N]` | push events, pull lists and blocks (central database only) |
 | `list [--active] [--ip=…]` | blocks with reason, server, expiry |
-| `block <ip> [--reason=…] [--ttl=…]` | manual block; `--ttl=0` is forever; refused for a whitelisted IP |
-| `unblock <ip>` | lift the block everywhere |
+| `block <ip or cidr> [--reason=…] [--ttl=…]` | manual block; `--ttl=0` is forever; refused for a whitelisted IP, or a network that is reserved or overlaps the whitelist |
+| `unblock <ip or cidr>` | lift the block everywhere |
+| `import [--source=…]` | fetch the configured blocklists (all, or one) |
+| `lists` | each list source with its size and last import |
 | `pattern:list`, `pattern:add <p>`, `pattern:remove <p>` | decoy patterns, validated |
 | `allow:list`, `allow:add <entry> [--comment=…] [--ttl=…]`, `allow:remove <entry>` | whitelist |
 
@@ -107,6 +109,60 @@ whitelist entries, as `lifted_by` of an unblock, and, when `block` is given no `
 `DefaultPatterns::LIST` is safe for any application. Add `DefaultPatterns::WORDPRESS_PROBES` only if the site is not
 WordPress: `'patterns' => [...DefaultPatterns::LIST, ...DefaultPatterns::WORDPRESS_PROBES]`.
 
+## Scanners that change address
+
+**Subnet escalation** is on by default. When 3 different addresses of one IPv4 `/24` hit a decoy within 24 hours,
+the whole `/24` is blocked; for IPv6 the first hit blocks its `/64` (one host usually owns a whole `/64`). Private and
+reserved networks are never escalated. With a central database, hits on different servers add up.
+
+    'subnets' => ['v4Prefix' => 24, 'v4Threshold' => 3, 'v6Prefix' => 64, 'v6Threshold' => 1, 'window' => 86400],
+    // or 'subnets' => false
+
+A network block is lifted with `scanner-trap unblock 45.155.205.0/24`; `block` accepts a CIDR too. A manual network
+block is refused when the network is private or reserved, or overlaps a whitelist entry (an octet mask such as
+`192.168.0.*` counts by its fixed octets).
+
+**Scanner signatures.** A pattern starting with `@` matches the User-Agent, case-insensitively: `@sqlmap`,
+`@nuclei`, `@zgrab` and the other tools in `DefaultPatterns::SCANNER_AGENTS` are part of the default list. A matching
+request is blacklisted on any page, decoy or not. Fragments of ordinary browser User-Agents (`@mozilla`, `@bot`, ...)
+are refused. Installations that already stored their patterns add them with `scanner-trap pattern:add '@sqlmap'`.
+
+## Imported blocklists
+
+    'lists' => [
+        'spamhaus-drop',
+        'firehol-level1',
+        ['name' => 'blocklist-de', 'url' => 'https://lists.blocklist.de/lists/all.txt'],
+        ['name' => 'own', 'file' => __DIR__ . '/deny.txt'],
+    ],
+
+`scanner-trap import` fetches them (one IP or CIDR per line, `#` and `;` comments; `'format' => 'spamhaus-json'` for
+Spamhaus JSON lines), drops private and reserved networks and anything wider than `/8` (IPv4) or `/16` (IPv6), and
+replaces each source's entries. Addresses on a list are refused while `blocking` is on; the whitelist still wins.
+`scanner-trap lists` shows each source with its size and last import.
+
+A source name is a lowercase letter followed by lowercase letters, digits and `-`, at most 32 characters in all.
+`import` prints one line per source, `N networks (was M)` and what each filter skipped (invalid, reserved, too wide).
+`import --source=NAME` imports one source; an empty `--source=` is a usage error. When a source fails, the others are
+still imported, the failed one keeps its previous entries, and the command exits with 3.
+
+URLs are fetched with ext-curl when it is loaded, else through PHP streams, which need `allow_url_fopen`. Imported
+lists need a Redis or file store (or a central database): an APCu store cannot import, because the CLI cannot reach the
+web server's APCu. Run the import daily from cron; with a central database on one server only, the others receive the
+lists on their next sync:
+
+    17 4 * * * cd /var/www/app && sudo -u www-data vendor/bin/scanner-trap import
+
+## Web server routing
+
+The trap only sees requests that reach PHP. Common nginx configurations answer two kinds of probes themselves, so
+they are never blacklisted:
+
+* missing `.php` files (`/wp-login.php`, `/xmlrpc.php`): PHP-FPM answers "File not found."; add
+  `try_files $uri /index.php?$query_string;` to the `location ~ \.php$` block;
+* dot paths (`/.env`, `/.git/config`) behind `deny all;`: replace it with `rewrite ^ /index.php last;` (the file is
+  still never served).
+
 ## Configuration
 
 | Key | Default | Meaning |
@@ -118,6 +174,8 @@ WordPress: `'patterns' => [...DefaultPatterns::LIST, ...DefaultPatterns::WORDPRE
 | `blockTtl` | `604800` | seconds a block lasts, `0` = forever |
 | `patterns` | `DefaultPatterns::LIST` | decoys; with a central database they live there and this only seeds `install` |
 | `allow` | `[]` | IPs, CIDR ranges, IPv4 masks like `192.168.0.*`; always wins over a block; with a central database this only seeds `install` |
+| `subnets` | on: `/24` after 3 addresses, `/64` after 1, 24 h | subnet escalation; `false` turns it off |
+| `lists` | `[]` | blocklists to import: preset names (`spamhaus-drop`, `firehol-level1`) or `['name' => …, 'url' or 'file' => …, 'format' => …]` |
 | `ownPaths` | `[]` | paths your site really serves; path and extension patterns never apply below them |
 | `trustedProxies` | `[]` | CIDR ranges of your load balancers; only then is `X-Forwarded-For` read |
 | `logger` | `null` | a PSR-3 logger for failures and new blocks |

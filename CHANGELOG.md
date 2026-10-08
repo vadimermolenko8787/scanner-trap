@@ -10,3 +10,7 @@ All notable changes to this project are documented here. The project follows [Se
 * Central PDO store (MySQL/MariaDB, PostgreSQL, SQLite) and `scanner-trap sync` for several servers.
 * `TrapManager` API and the `scanner-trap` CLI: install, sync, list, block, unblock, patterns, whitelist.
 * Default decoy patterns, and WordPress probes for sites that are not WordPress.
+* Subnet escalation: 3 trapped addresses of one IPv4 /24 within 24 hours, or 1 of an IPv6 /64, block the network.
+* Scanner signatures: `@fragment` patterns match the User-Agent; the defaults cover sqlmap, nuclei, zgrab and other tools.
+* Imported blocklists: Spamhaus DROP, FireHOL level1, any URL or file; `scanner-trap import` and `lists`.
+* `block` and `unblock` accept a CIDR.
