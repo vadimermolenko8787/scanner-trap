@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php" colors="true" cacheDirectory=".phpunit.cache"
+         failOnWarning="true" failOnRisky="true" failOnDeprecation="true" failOnNotice="true">
+    <testsuites>
+        <testsuite name="unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="integration">
+            <directory>tests/Integration</directory>
+        </testsuite>
+    </testsuites>
+    <source restrictDeprecations="true" restrictNotices="true" restrictWarnings="true">
+        <include>
+            <directory>src</directory>
+        </include>
+    </source>
+    <php>
+        <ini name="error_reporting" value="-1"/>
+        <env name="SCANNER_TRAP_REDIS_HOST" value="127.0.0.1" force="false"/>
+        <env name="SCANNER_TRAP_REDIS_PORT" value="6379" force="false"/>
+        <env name="SCANNER_TRAP_REDIS_DB" value="12" force="false"/>
+        <env name="SCANNER_TRAP_MYSQL_DSN" value="" force="false"/>
+        <env name="SCANNER_TRAP_MYSQL_USER" value="trap" force="false"/>
+        <env name="SCANNER_TRAP_MYSQL_PASSWORD" value="trap" force="false"/>
+        <env name="SCANNER_TRAP_PGSQL_DSN" value="" force="false"/>
+        <env name="SCANNER_TRAP_PGSQL_USER" value="trap" force="false"/>
+        <env name="SCANNER_TRAP_PGSQL_PASSWORD" value="trap" force="false"/>
+    </php>
+</phpunit>
