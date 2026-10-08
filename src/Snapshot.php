@@ -4,7 +4,11 @@ declare(strict_types=1);
 
 namespace ScannerTrap;
 
-/** What Guard reads in one round trip. A null list was never stored; a corrupt snapshot lets the request through. */
+/**
+ * What Guard reads in one round trip. `blocked` is true for an IP or a network block; `network` names the blocking
+ * network, `listed` the list source that lists the IP. A null list was never stored; a corrupt snapshot lets the
+ * request through.
+ */
 final class Snapshot
 {
     /**
@@ -16,11 +20,13 @@ final class Snapshot
         public readonly ?array $patterns,
         public readonly ?array $allow,
         public readonly bool $corrupt = false,
+        public readonly ?string $network = null,
+        public readonly ?string $listed = null,
     ) {
     }
 
     /** Decodes the two JSON lists as a store keeps them; null JSON = absent. */
-    public static function decode(bool $blocked, ?string $patternsJson, ?string $allowJson): self
+    public static function decode(bool $blocked, ?string $patternsJson, ?string $allowJson, ?string $network = null, ?string $listed = null): self
     {
         $patterns = self::decodeList($patternsJson);
         $allow = self::decodeList($allowJson);
@@ -42,7 +48,7 @@ final class Snapshot
             }
         }
         /** @var list<string>|null $patterns */
-        return new self($blocked, $patterns, $entries);
+        return new self($blocked, $patterns, $entries, false, $network, $listed);
     }
 
     /** @return list<string> the whitelist entries still in force */

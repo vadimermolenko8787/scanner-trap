@@ -7,11 +7,16 @@ namespace ScannerTrap\Store;
 use ScannerTrap\AllowEntry;
 use ScannerTrap\Block;
 use ScannerTrap\Exception\StoreException;
+use ScannerTrap\Network;
 use ScannerTrap\Snapshot;
 
 /**
  * A directory: one file per blocked IP, JSON lists, an append-only event log. The lists are decoded once per process
  * and re-read only when the file behind them changes (inode, mtime or size: replaceLists() renames a new file in).
+ * Networks live in a PHP file returning an array, renamed under a new name on every write (networks.current points to
+ * it): opcache serves it from memory, and a new name is seen even with opcache.validate_timestamps=0.
+ *
+ * @phpstan-type NetworkData array{blocks: array<int, array<int, array<string, array<mixed>>>>}
  */
 final class FileLocalStore implements LocalStore
 {
@@ -22,11 +27,17 @@ final class FileLocalStore implements LocalStore
     private const EVENTS = 'events.log';
     private const OWNER = 'owner';
     private const LOCK = 'sync.lock';
+    private const NETWORKS = 'networks.current';
+    private const NETWORKS_LOCK = 'networks.lock';
+    private const NETWORKS_KEEP = 600;
+    private const NO_NETWORKS = ['blocks' => []];
 
     /** @var array<string, array{string, ?string}> path => [stat key, contents] */
     private static array $cache = [];
     /** @var resource|null */
     private $lock = null;
+    /** @var array{string, NetworkData}|null pointer => data of the last include */
+    private ?array $networksCache = null;
 
     public function __construct(private readonly string $dir)
     {
@@ -34,11 +45,23 @@ final class FileLocalStore implements LocalStore
 
     public function read(string $ip): Snapshot
     {
-        return Snapshot::decode($this->isBlocked($ip), $this->cached(self::PATTERNS), $this->cached(self::ALLOW));
+        try {
+            $network = $this->matchNetworks($this->networks(), $ip);
+        } catch (StoreException) {
+            return new Snapshot(false, null, null, true);
+        }
+        return Snapshot::decode($network !== null || $this->isBlocked($ip), $this->cached(self::PATTERNS), $this->cached(self::ALLOW), $network);
     }
 
     public function addBlock(Block $block, bool $recordEvent): bool
     {
+        if ($block->isNetwork()) {
+            $created = $this->addNetworkBlock($block);
+            if ($created && $recordEvent) {
+                $this->appendEvent($block);
+            }
+            return $created;
+        }
         $file = $this->blockFile($block->ip);
         $this->ensureDir($this->dir . '/' . self::BLOCKS);
         $handle = @fopen($file, 'x');
@@ -68,12 +91,33 @@ final class FileLocalStore implements LocalStore
                 $blocks[] = $block;
             }
         }
+        foreach ($this->networks()['blocks'] as $byPrefix) {
+            foreach ($byPrefix as $entries) {
+                foreach ($entries as $data) {
+                    $block = Block::fromArray($data);
+                    if ($block !== null && $block->isActive(time())) {
+                        $blocks[] = $block;
+                    }
+                }
+            }
+        }
         return $blocks;
     }
 
-    public function removeBlock(string $ip): void
+    public function removeBlock(string $target): void
     {
-        @unlink($this->blockFile($ip));
+        $network = str_contains($target, '/') ? Network::parse($target) : null;
+        if ($network === null) {
+            @unlink($this->blockFile($target));
+            return;
+        }
+        $this->updateNetworks(static function (array $data) use ($network): ?array {
+            if (!isset($data['blocks'][$network->family][$network->prefix][$network->address])) {
+                return null;
+            }
+            unset($data['blocks'][$network->family][$network->prefix][$network->address]);
+            return $data;
+        });
     }
 
     public function patterns(): ?array
@@ -199,6 +243,110 @@ final class FileLocalStore implements LocalStore
             flock($this->lock, LOCK_UN);
             fclose($this->lock);
             $this->lock = null;
+        }
+    }
+
+    private function addNetworkBlock(Block $block): bool
+    {
+        $network = Network::parse($block->ip) ?? throw new StoreException("Not a network: {$block->ip}");
+        return $this->updateNetworks(static function (array $data) use ($block, $network): ?array {
+            $existing = $data['blocks'][$network->family][$network->prefix][$network->address] ?? null;
+            if (is_array($existing) && Block::fromArray($existing)?->isActive(time())) {
+                return null;
+            }
+            $data['blocks'][$network->family][$network->prefix][$network->address] = $block->toArray();
+            return $data;
+        });
+    }
+
+    /**
+     * @param NetworkData $data
+     * @return string|null the blocking network
+     */
+    private function matchNetworks(array $data, string $ip): ?string
+    {
+        $family = str_contains($ip, ':') ? 6 : 4;
+        $network = null;
+        foreach ($data['blocks'][$family] ?? [] as $prefix => $entries) {
+            $candidate = Network::of($ip, $prefix);
+            $entry = $candidate === null ? null : ($entries[$candidate->address] ?? null);
+            if (is_array($entry) && Block::fromArray($entry)?->isActive(time())) {
+                $network = $candidate?->cidr();
+                break;
+            }
+        }
+        return $network;
+    }
+
+    /** @return NetworkData */
+    private function networks(bool $fresh = false): array
+    {
+        $pointer = @file_get_contents($this->dir . '/' . self::NETWORKS);
+        if ($pointer === false) {
+            return self::NO_NETWORKS;
+        }
+        $pointer = trim($pointer);
+        if (!$fresh && $this->networksCache !== null && $this->networksCache[0] === $pointer) {
+            return $this->networksCache[1];
+        }
+        $file = $this->dir . '/' . $pointer;
+        if (preg_match('/^networks-[0-9a-f]{16}\.php$/', $pointer) !== 1 || !is_file($file)) {
+            throw new StoreException('networks.current does not name a networks file');
+        }
+        try {
+            $data = include $file;
+        } catch (\Throwable $e) {
+            throw new StoreException("Cannot read {$file}: {$e->getMessage()}", 0, $e);
+        }
+        if (!is_array($data) || !is_array($data['blocks'] ?? null)) {
+            throw new StoreException("{$file} does not hold networks");
+        }
+        /** @var NetworkData $data */
+        $this->networksCache = [$pointer, $data];
+        return $data;
+    }
+
+    /**
+     * Reads the networks afresh under the lock, applies $change and writes the result under a new name; a null from
+     * $change means nothing changed. Expired network blocks are pruned on every write.
+     *
+     * @param \Closure(NetworkData): (NetworkData|null) $change
+     */
+    private function updateNetworks(\Closure $change): bool
+    {
+        $this->ensureDir($this->dir);
+        $handle = @fopen($this->dir . '/' . self::NETWORKS_LOCK, 'c');
+        if ($handle === false) {
+            throw new StoreException("Cannot open the networks lock in {$this->dir}");
+        }
+        try {
+            flock($handle, LOCK_EX);
+            $data = $change($this->networks(true));
+            if ($data === null) {
+                return false;
+            }
+            foreach ($data['blocks'] as $family => $byPrefix) {
+                foreach ($byPrefix as $prefix => $entries) {
+                    foreach ($entries as $address => $entry) {
+                        if (Block::fromArray($entry)?->isActive(time()) !== true) {
+                            unset($data['blocks'][$family][$prefix][$address]);
+                        }
+                    }
+                }
+            }
+            $name = 'networks-' . bin2hex(random_bytes(8)) . '.php';
+            $this->writeAtomically($name, '<?php return ' . var_export($data, true) . ";\n");
+            $this->writeAtomically(self::NETWORKS, $name);
+            $this->networksCache = null;
+            foreach (glob($this->dir . '/networks-*.php') ?: [] as $old) {
+                if (basename($old) !== $name && (int) @filemtime($old) < time() - self::NETWORKS_KEEP) {
+                    @unlink($old);
+                }
+            }
+            return true;
+        } finally {
+            flock($handle, LOCK_UN);
+            fclose($handle);
         }
     }
 

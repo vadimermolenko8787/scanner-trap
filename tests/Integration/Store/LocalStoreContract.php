@@ -140,4 +140,80 @@ abstract class LocalStoreContract extends TestCase
         $this->assertTrue($second->lock(60));
         $second->unlock();
     }
+
+    public function test_a_network_block_covers_every_address_in_it(): void
+    {
+        $store = $this->createStore();
+        $store->addBlock(new Block('45.155.205.0/24', time(), time() + 600, source: 'subnet'), false);
+
+        $snapshot = $this->createStore()->read('45.155.205.77');
+        $this->assertTrue($snapshot->blocked);
+        $this->assertSame('45.155.205.0/24', $snapshot->network);
+        $this->assertFalse($store->read('45.155.206.1')->blocked);
+        $this->assertNull($store->read('45.155.206.1')->network);
+    }
+
+    public function test_network_blocks_at_several_prefix_lengths(): void
+    {
+        $store = $this->createStore();
+        $store->addBlock(new Block('45.155.0.0/16', time(), 0, source: 'manual'), false);
+        $store->addBlock(new Block('91.92.248.0/22', time(), 0, source: 'manual'), false);
+
+        $this->assertSame('45.155.0.0/16', $store->read('45.155.1.1')->network);
+        $this->assertSame('91.92.248.0/22', $store->read('91.92.251.200')->network);
+        $this->assertFalse($store->read('91.92.252.1')->blocked);
+    }
+
+    public function test_an_ipv6_network_block(): void
+    {
+        $store = $this->createStore();
+        $store->addBlock(new Block('2a01:4f8:c0c:1234::/64', time(), 0, source: 'subnet'), false);
+
+        $this->assertSame('2a01:4f8:c0c:1234::/64', $store->read('2a01:4f8:c0c:1234:ffff::9')->network);
+        $this->assertFalse($store->read('2a01:4f8:c0c:1235::1')->blocked);
+    }
+
+    public function test_a_network_block_is_created_once_listed_and_removed(): void
+    {
+        $store = $this->createStore();
+        $block = new Block('45.155.205.0/24', time(), time() + 600, 'web1', 'GET', '/.env', '/.env*', 'zgrab', 'subnet');
+        $store->addBlock(new Block('45.155.205.9', time(), time() + 600), false);
+
+        $this->assertTrue($store->addBlock($block, false));
+        $this->assertFalse($store->addBlock($block, false));
+        $listed = array_values(array_filter($store->blocks(), static fn (Block $b): bool => $b->isNetwork()));
+        $this->assertEquals([$block], $listed);
+
+        $store->removeBlock('45.155.205.0/24');
+        $this->assertNull($store->read('45.155.205.77')->network);
+        $this->assertFalse($store->read('45.155.205.77')->blocked);
+        $this->assertTrue($store->read('45.155.205.9')->blocked, 'the IP block is a separate entry');
+    }
+
+    public function test_a_network_block_queues_an_event_when_asked(): void
+    {
+        $store = $this->createStore();
+        $block = new Block('45.155.205.0/24', time(), 0, source: 'subnet');
+        $store->addBlock($block, true);
+
+        $events = array_values($store->events(10));
+        $this->assertContainsOnlyInstancesOf(Block::class, $events);
+        $this->assertSame($this->keepsEvents() ? ['45.155.205.0/24'] : [], array_map(static fn (Block $b): string => $b->ip, $events));
+    }
+
+    public function test_an_expired_network_block_lets_the_network_back_in(): void
+    {
+        $store = $this->createStore();
+        $store->addBlock(new Block('45.155.205.0/24', time(), time() + 1, source: 'subnet'), false);
+        sleep(2);
+
+        $this->assertFalse($store->read('45.155.205.77')->blocked);
+        $this->assertSame([], array_values(array_filter($store->blocks(), static fn (Block $b): bool => $b->isNetwork())));
+        $this->assertTrue($store->addBlock(new Block('45.155.205.0/24', time(), time() + 60, source: 'subnet'), false));
+    }
+
+    protected function keepsEvents(): bool
+    {
+        return true;
+    }
 }

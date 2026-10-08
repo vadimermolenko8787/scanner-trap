@@ -113,4 +113,34 @@ final class FileLocalStoreTest extends LocalStoreContract
         $this->expectException(\ScannerTrap\Exception\StoreException::class);
         $store->addBlock(new Block('203.0.113.7', time(), 0), true);
     }
+
+    public function test_every_network_write_gets_a_new_file_name_so_opcache_cannot_hide_it(): void
+    {
+        $writer = $this->createStore();
+        $reader = $this->createStore();
+        $writer->addBlock(new Block('45.155.205.0/24', time(), 0, source: 'manual'), false);
+        $first = trim((string) file_get_contents($this->dir . '/networks.current'));
+        $this->assertTrue($reader->read('45.155.205.1')->blocked);
+
+        $writer->addBlock(new Block('91.92.248.0/22', time(), 0, source: 'manual'), false);
+        $second = trim((string) file_get_contents($this->dir . '/networks.current'));
+
+        $this->assertMatchesRegularExpression('/^networks-[0-9a-f]{16}\.php$/', $second);
+        $this->assertNotSame($first, $second);
+        $this->assertTrue($reader->read('91.92.249.1')->blocked);
+    }
+
+    public function test_a_corrupt_networks_pointer_or_file_makes_a_corrupt_snapshot(): void
+    {
+        mkdir($this->dir, 0775, true);
+        file_put_contents($this->dir . '/networks.current', '../../etc/passwd');
+        $this->assertTrue($this->createStore()->read('45.155.205.1')->corrupt);
+
+        file_put_contents($this->dir . '/networks.current', 'networks-0123456789abcdef.php');
+        file_put_contents($this->dir . '/networks-0123456789abcdef.php', '<?php return "nope";');
+        $this->assertTrue($this->createStore()->read('45.155.205.1')->corrupt);
+
+        file_put_contents($this->dir . '/networks-0123456789abcdef.php', '<?php syntax error');
+        $this->assertTrue($this->createStore()->read('45.155.205.1')->corrupt);
+    }
 }

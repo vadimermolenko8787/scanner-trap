@@ -88,4 +88,26 @@ final class SnapshotTest extends TestCase
         $this->assertNull(AllowEntry::fromArray(['entry' => 'office']));
         $this->assertFalse((new AllowEntry('10.0.0.1', '', 100))->isActive(100));
     }
+
+    public function test_a_network_block_and_a_list_entry_travel_in_the_snapshot(): void
+    {
+        $snapshot = Snapshot::decode(true, '[]', '[]', '45.155.205.0/24', 'spamhaus-drop');
+
+        $this->assertTrue($snapshot->blocked);
+        $this->assertSame('45.155.205.0/24', $snapshot->network);
+        $this->assertSame('spamhaus-drop', $snapshot->listed);
+        $this->assertNull(Snapshot::decode(false, '[]', '[]')->network);
+    }
+
+    public function test_a_block_may_target_a_network(): void
+    {
+        $network = new Block('45.155.205.7/24', 100, 0, source: 'subnet');
+        $ip = new Block('45.155.205.7', 100, 0);
+
+        $this->assertSame('45.155.205.0/24', $network->ip);
+        $this->assertTrue($network->isNetwork());
+        $this->assertFalse($ip->isNetwork());
+        $this->assertEquals($network, Block::fromArray($network->toArray()));
+        $this->assertNull(Block::fromArray(['ip' => '45.155.205.0/33']));
+    }
 }

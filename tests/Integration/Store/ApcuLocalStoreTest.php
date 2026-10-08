@@ -40,4 +40,9 @@ final class ApcuLocalStoreTest extends LocalStoreContract
         $this->assertSame([], $store->events(10));
         $this->assertFalse($store->waitForEvents(0));
     }
+
+    protected function keepsEvents(): bool
+    {
+        return false;
+    }
 }

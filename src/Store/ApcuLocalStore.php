@@ -6,6 +6,7 @@ namespace ScannerTrap\Store;
 
 use ScannerTrap\AllowEntry;
 use ScannerTrap\Block;
+use ScannerTrap\Network;
 use ScannerTrap\Snapshot;
 
 /** One PHP server only: APCu keys with TTL, no events, so never part of mode 3. */
@@ -17,20 +18,28 @@ final class ApcuLocalStore implements LocalStore
 
     public function read(string $ip): Snapshot
     {
-        $values = apcu_fetch([$this->key('block:' . $ip), $this->key('patterns'), $this->key('allow')]);
+        $family = str_contains($ip, ':') ? 6 : 4;
+        $keys = [$this->key('block:' . $ip), $this->key('patterns'), $this->key('allow')];
+        for ($prefix = 0; $prefix <= ($family === 4 ? 32 : 128); $prefix++) {
+            $keys[] = $this->key("netlen:{$family}/{$prefix}");
+        }
+        $values = apcu_fetch($keys);
         $values = is_array($values) ? $values : [];
+        [$network, $listed] = $this->matchNetworks($ip, $values);
         $patterns = $values[$this->key('patterns')] ?? null;
         $allow = $values[$this->key('allow')] ?? null;
         return Snapshot::decode(
-            $this->active($values[$this->key('block:' . $ip)] ?? null) !== null,
+            $network !== null || $this->active($values[$this->key('block:' . $ip)] ?? null) !== null,
             is_string($patterns) ? $patterns : null,
             is_string($allow) ? $allow : null,
+            $network,
+            $listed,
         );
     }
 
     public function addBlock(Block $block, bool $recordEvent): bool
     {
-        $key = $this->key('block:' . $block->ip);
+        $key = $this->targetKey($block->ip);
         if (!$block->isActive(time())) {
             return false;
         }
@@ -38,13 +47,17 @@ final class ApcuLocalStore implements LocalStore
         if ($this->active(apcu_fetch($key)) === null) {
             apcu_delete($key);
         }
-        return apcu_add($key, $this->json($block->toArray()), $block->ttl(time()));
+        $created = apcu_add($key, $this->json($block->toArray()), $block->ttl(time()));
+        if ($created && $block->isNetwork()) {
+            apcu_store($this->key('netlen:' . Network::parse($block->ip)?->token()), 1);
+        }
+        return $created;
     }
 
     public function blocks(): array
     {
         $blocks = [];
-        foreach (new \APCUIterator('/^' . preg_quote($this->key('block:'), '/') . '/') as $item) {
+        foreach (new \APCUIterator('/^' . preg_quote($this->prefix, '/') . '(block|net):/') as $item) {
             $block = is_array($item) ? $this->active($item['value'] ?? null) : null;
             if ($block !== null) {
                 $blocks[] = $block;
@@ -53,9 +66,9 @@ final class ApcuLocalStore implements LocalStore
         return $blocks;
     }
 
-    public function removeBlock(string $ip): void
+    public function removeBlock(string $target): void
     {
-        apcu_delete($this->key('block:' . $ip));
+        apcu_delete($this->targetKey($target));
     }
 
     public function patterns(): ?array
@@ -120,6 +133,42 @@ final class ApcuLocalStore implements LocalStore
     public function unlock(): void
     {
         apcu_delete($this->key('sync-lock'));
+    }
+
+    /**
+     * @param array<mixed> $values the first fetch, holding the netlen keys that exist
+     * @return array{?string, ?string}
+     */
+    private function matchNetworks(string $ip, array $values): array
+    {
+        $wanted = [];
+        foreach (Network::candidates($ip) as $token => $cidr) {
+            if (array_key_exists($this->key("netlen:{$token}"), $values)) {
+                $wanted[$cidr] = [$this->key('net:' . $cidr), $this->key('lnet:' . $cidr)];
+            }
+        }
+        if ($wanted === []) {
+            return [null, null];
+        }
+        $found = apcu_fetch(array_merge(...array_values($wanted)));
+        $found = is_array($found) ? $found : [];
+        $network = null;
+        $listed = null;
+        foreach ($wanted as $cidr => [$netKey, $listKey]) {
+            if ($network === null && $this->active($found[$netKey] ?? null) !== null) {
+                $network = $cidr;
+            }
+            $sources = $found[$listKey] ?? null;
+            if ($listed === null && is_array($sources) && is_string(reset($sources))) {
+                $listed = reset($sources);
+            }
+        }
+        return [$network, $listed];
+    }
+
+    private function targetKey(string $target): string
+    {
+        return $this->key((str_contains($target, '/') ? 'net:' : 'block:') . $target);
     }
 
     /** The stored block when it is still in force, else null. */

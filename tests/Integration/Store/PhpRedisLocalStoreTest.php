@@ -83,4 +83,12 @@ class PhpRedisLocalStoreTest extends LocalStoreContract
         $this->expectException(StoreException::class);
         PhpRedisConnection::connect('127.0.0.1', 1, 0, null, 0.2, 0.2)->raw('PING');
     }
+
+    public function test_network_keys_are_the_specs(): void
+    {
+        $this->createStore()->addBlock(new Block('45.155.205.0/24', time(), time() + 600, source: 'subnet'), false);
+
+        $this->assertSame(1, $this->redis->raw('EXISTS', 'scanner-trap:net:45.155.205.0/24'));
+        $this->assertSame(['4/24'], $this->redis->raw('SMEMBERS', 'scanner-trap:netlens'));
+    }
 }

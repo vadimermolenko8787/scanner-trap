@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace ScannerTrap;
 
-/** One block of one IP: the local record, the event pushed to the central store and a central row are this one shape. */
+/** One block of one IP or one network: the local record, the event pushed to the central store and a central row are this one shape. */
 final class Block
 {
     public const SOURCE_TRAP = 'trap';
@@ -33,13 +33,19 @@ final class Block
         public readonly ?int $liftedAt = null,
         public readonly ?string $liftedBy = null,
     ) {
-        $this->ip = Rules::normalizeIp($ip) ?? throw new \InvalidArgumentException("Not an IP address: {$ip}");
+        $this->ip = self::target($ip) ?? throw new \InvalidArgumentException("Not an IP address or network: {$ip}");
         $this->server = self::text($server, self::LIMITS['server']);
         $this->method = self::text($method, self::LIMITS['method']);
         $this->path = self::text($path, self::LIMITS['path']);
         $this->pattern = self::text($pattern, self::LIMITS['pattern']);
         $this->userAgent = self::text($userAgent, self::LIMITS['userAgent']);
         $this->source = self::text($source, self::LIMITS['source']);
+    }
+
+    /** True when the block covers a network (CIDR) rather than one address. */
+    public function isNetwork(): bool
+    {
+        return str_contains($this->ip, '/');
     }
 
     public function isActive(int $now): bool
@@ -66,7 +72,7 @@ final class Block
     /** @param array<mixed> $data  Null when there is no valid IP: such a record cannot block anybody. */
     public static function fromArray(array $data): ?self
     {
-        $ip = Rules::normalizeIp(is_string($data['ip'] ?? null) ? $data['ip'] : '');
+        $ip = self::target(is_string($data['ip'] ?? null) ? $data['ip'] : '');
         if ($ip === null) {
             return null;
         }
@@ -85,6 +91,12 @@ final class Block
             is_numeric($data['liftedAt'] ?? null) ? (int) $data['liftedAt'] : null,
             is_string($data['liftedBy'] ?? null) ? $data['liftedBy'] : null,
         );
+    }
+
+    /** An IP, normalized, or a CIDR, normalized; null for anything else. */
+    private static function target(string $value): ?string
+    {
+        return str_contains($value, '/') ? Network::parse($value)?->cidr() : Rules::normalizeIp($value);
     }
 
     /** Cut to $max bytes and made valid UTF-8, so JSON and a utf8mb4 column both take it. */

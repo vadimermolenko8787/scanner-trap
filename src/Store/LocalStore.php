@@ -11,19 +11,19 @@ use ScannerTrap\Snapshot;
 /** This server's copy of the blacklist and lists; Guard reads it once per request. Every failure is a StoreException. */
 interface LocalStore
 {
-    /** One round trip: is the IP blocked, the patterns, the whitelist. */
+    /** One round trip: is the IP blocked (by itself or a network), is it listed, the patterns, the whitelist. */
     public function read(string $ip): Snapshot;
 
     /**
-     * Blocks $block->ip until $block->expiresAt (0 = forever) and, when $recordEvent, queues the block as an event, both
-     * atomically: of several parallel calls for one IP exactly one returns true and queues an event.
+     * Blocks $block->ip, an IP or a network, until $block->expiresAt (0 = forever) and, when $recordEvent, queues the block as
+     * an event, both atomically: of several parallel calls for one IP exactly one returns true and queues an event.
      */
     public function addBlock(Block $block, bool $recordEvent): bool;
 
     /** @return list<Block> the active blocks */
     public function blocks(): array;
 
-    public function removeBlock(string $ip): void;
+    public function removeBlock(string $target): void;
 
     /** @return list<string>|null null = never stored */
     public function patterns(): ?array;
