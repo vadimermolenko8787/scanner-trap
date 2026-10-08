@@ -29,6 +29,10 @@ final class Rules
             return null;
         }
         $packed = inet_pton($ip);
+        // ::ffff:a.b.c.d is the v4 address a dual-stack socket reports: one spelling for it too
+        if ($packed !== false && strlen($packed) === 16 && str_starts_with($packed, str_repeat("\0", 10) . "\xff\xff")) {
+            $packed = substr($packed, 12);
+        }
         $normalized = $packed === false ? false : inet_ntop($packed);
         return $normalized === false ? null : $normalized;
     }
@@ -116,6 +120,7 @@ final class Rules
      */
     public static function isAllowed(string $ip, array $entries): bool
     {
+        $ip = self::normalizeIp($ip) ?? $ip;
         foreach ($entries as $entry) {
             if (!is_string($entry)) {
                 continue;

@@ -21,6 +21,7 @@ final class RequestContextTest extends TestCase
             'untrusted remote, header ignored (spoofing)' => ['203.0.113.7', '198.51.100.1', self::PROXIES, '203.0.113.7'],
             'trusted remote, client from the header' => ['10.0.0.2', '198.51.100.1', self::PROXIES, '198.51.100.1'],
             'rightmost untrusted wins over a spoofed left part' => ['10.0.0.2', '1.1.1.1, 198.51.100.1, 10.0.0.3', self::PROXIES, '198.51.100.1'],
+            'mapped v4 proxy is trusted as its v4' => ['::ffff:10.0.0.5', '203.0.113.9', self::PROXIES, '203.0.113.9'],
             'v6 client collapsed' => ['10.0.0.2', '2001:DB8:0:0::7', self::PROXIES, '2001:db8::7'],
             'v6 proxy' => ['2001:db8:ffff::1', '198.51.100.1', self::PROXIES, '198.51.100.1'],
             'empty elements skipped' => ['10.0.0.2', '198.51.100.1, , ', self::PROXIES, '198.51.100.1'],

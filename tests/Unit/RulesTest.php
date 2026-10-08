@@ -111,6 +111,10 @@ final class RulesTest extends TestCase
             'mask against v6' => ['2001:db8::1', ['10.*.*.*'], false],
             'nothing allowed' => ['192.168.0.1', [], false],
             'whole range' => ['203.0.113.9', ['0.0.0.0/0'], true],
+            'mapped v4 against a v4 entry' => ['::ffff:1.2.3.4', ['1.2.3.4'], true],
+            'mapped v4 against a v4 range' => ['::ffff:10.0.0.5', ['10.0.0.0/8'], true],
+            'mapped v4 against an octet mask' => ['::ffff:192.168.0.42', ['192.168.0.*'], true],
+            'mapped v4 outside the range' => ['::ffff:11.0.0.5', ['10.0.0.0/8'], false],
             'garbage entry is skipped' => ['198.51.100.7', ['office', '198.51.100.0/33', '198.51.100.7'], true],
         ];
     }
@@ -126,6 +130,9 @@ final class RulesTest extends TestCase
     {
         $this->assertSame('2001:db8::7', Rules::normalizeIp('2001:DB8:0:0::7'));
         $this->assertSame('203.0.113.7', Rules::normalizeIp('203.0.113.7'));
+        $this->assertSame('10.0.0.5', Rules::normalizeIp('::ffff:10.0.0.5'));
+        $this->assertSame('10.0.0.5', Rules::normalizeIp('0:0:0:0:0:FFFF:0a00:0005'));
+        $this->assertSame('2001:db8::ffff:1', Rules::normalizeIp('2001:db8::ffff:1'));
         $this->assertNull(Rules::normalizeIp('not-an-ip'));
         $this->assertNull(Rules::normalizeIp(''));
         $this->assertNull(Rules::normalizeIp('1.2.3.4:80'));
@@ -156,6 +163,7 @@ final class RulesTest extends TestCase
             'v4 loopback' => ['127.0.0.1', true],
             'anywhere in 127/8' => ['127.3.2.1', true],
             'v6 loopback' => ['::1', true],
+            'mapped v4 loopback' => ['::ffff:127.0.0.1', true],
             'public v4' => ['203.0.113.7', false],
             'public v6' => ['2001:db8::1', false],
         ];
