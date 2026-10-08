@@ -33,6 +33,13 @@ sync`, or share a group with `umask 002`. Otherwise the web server cannot write 
 round): the trap silently fails open, or sync fails. Configure a PSR-3 `logger`: it is the only way to learn that the
 trap failed open.
 
+The file store directory also holds PHP files that the store includes (`networks-*.php`): make it writable only by the
+web server user, because anything that can write there can run code in your application.
+
+If `networks.current` or `lists.current` in that directory is corrupt, the trap fails open on those lookups. Delete
+the pointer file: network blocks (or imported lists) are then empty until the next network block is written (or the
+next `scanner-trap import`).
+
 ## Several servers sharing one Redis
 
     \ScannerTrap\ScannerTrap::guard(__DIR__ . '/../scanner-trap.php');
@@ -84,9 +91,9 @@ with its own worker can call `ScannerTrap::fromConfig($config)->manager()->sync(
 |---|---|
 | `install` | central database: tables, owner id, seeded lists; otherwise the config's lists into the local store |
 | `sync [--watch=N]` | push events, pull lists and blocks (central database only) |
-| `list [--active] [--ip=…]` | blocks with reason, server, expiry |
+| `list [--active] [--ip=…]` | blocks with reason, server, expiry; with `--ip`, the address's own block and every network block covering it |
 | `block <ip or cidr> [--reason=…] [--ttl=…]` | manual block; `--ttl=0` is forever; refused for a whitelisted IP, or a network that is reserved or overlaps the whitelist |
-| `unblock <ip or cidr>` | lift the block everywhere |
+| `unblock <ip or cidr>` | lift the block everywhere (a network's escalation count starts afresh); an address still inside a blocked network is reported as such |
 | `import [--source=…]` | fetch the configured blocklists (all, or one) |
 | `lists` | each list source with its size and last import |
 | `pattern:list`, `pattern:add <p>`, `pattern:remove <p>` | decoy patterns, validated |
@@ -105,6 +112,7 @@ whitelist entries, as `lifted_by` of an unblock, and, when `block` is given no `
 | open prefix | `/.env*` | everything beginning with the text before `*` |
 | extension | `*.sql` | a path ending in the extension |
 | SQL fragment | `~union select` | the fragment anywhere in the decoded URI |
+| scanner signature | `@sqlmap` | the fragment in the User-Agent, case-insensitively, on any page |
 
 `DefaultPatterns::LIST` is safe for any application. Add `DefaultPatterns::WORDPRESS_PROBES` only if the site is not
 WordPress: `'patterns' => [...DefaultPatterns::LIST, ...DefaultPatterns::WORDPRESS_PROBES]`.
@@ -114,6 +122,10 @@ WordPress: `'patterns' => [...DefaultPatterns::LIST, ...DefaultPatterns::WORDPRE
 **Subnet escalation** is on by default. When 3 different addresses of one IPv4 `/24` hit a decoy within 24 hours,
 the whole `/24` is blocked; for IPv6 the first hit blocks its `/64` (one host usually owns a whole `/64`). Private and
 reserved networks are never escalated. With a central database, hits on different servers add up.
+
+A `/24` can be a mobile carrier's CGNAT pool, where unrelated visitors share a few addresses. If your visitors come
+from such networks, raise `v4Threshold`, use a narrower `v4Prefix` (up to `31`), or set `'subnets' => false`; `allow`
+entries always win over a network block.
 
     'subnets' => ['v4Prefix' => 24, 'v4Threshold' => 3, 'v6Prefix' => 64, 'v6Threshold' => 1, 'window' => 86400],
     // or 'subnets' => false
@@ -125,7 +137,8 @@ block is refused when the network is private or reserved, or overlaps a whitelis
 **Scanner signatures.** A pattern starting with `@` matches the User-Agent, case-insensitively: `@sqlmap`,
 `@nuclei`, `@zgrab` and the other tools in `DefaultPatterns::SCANNER_AGENTS` are part of the default list. A matching
 request is blacklisted on any page, decoy or not. Fragments of ordinary browser User-Agents (`@mozilla`, `@bot`, ...)
-are refused. Installations that already stored their patterns add them with `scanner-trap pattern:add '@sqlmap'`.
+are refused, and so is any fragment that occurs in the User-Agent of a current Chrome, Firefox, Safari or Edge
+(`@like gecko`, `@win64; x64`). Installations that already stored their patterns add them with `scanner-trap pattern:add '@sqlmap'`.
 
 ## Imported blocklists
 
@@ -141,7 +154,8 @@ Spamhaus JSON lines), drops private and reserved networks and anything wider tha
 replaces each source's entries. Addresses on a list are refused while `blocking` is on; the whitelist still wins.
 `scanner-trap lists` shows each source with its size and last import.
 
-A source name is a lowercase letter followed by lowercase letters, digits and `-`, at most 32 characters in all.
+A source name is a lowercase letter followed by lowercase letters, digits and `-`, at most 32 characters in all, and
+a custom source may not reuse a preset name (`spamhaus-drop`, `firehol-level1`).
 `import` prints one line per source, `N networks (was M)` and what each filter skipped (invalid, reserved, too wide).
 `import --source=NAME` imports one source; an empty `--source=` is a usage error. When a source fails, the others are
 still imported, the failed one keeps its previous entries, and the command exits with 3.
