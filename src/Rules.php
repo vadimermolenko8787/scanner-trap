@@ -14,6 +14,13 @@ final class Rules
     public const TYPE_SUFFIX = 'suffix';
     /** `~union select`: a fragment anywhere in the decoded URI, query string included. */
     public const TYPE_CONTAINS = 'contains';
+    /** `@sqlmap`: a fragment of a scanning tool's User-Agent. */
+    public const TYPE_AGENT = 'agent';
+    /** Part of ordinary browsers' User-Agents: a signature inside one of these would match real visitors. */
+    private const BROWSER_TOKENS = [
+        'mozilla', 'chrome', 'safari', 'applewebkit', 'gecko', 'khtml', 'windows', 'macintosh', 'linux', 'android',
+        'iphone', 'mobile', 'bot', 'compatible', 'like',
+    ];
     private const LOOPBACK = ['127.0.0.0/8', '::1'];
 
     /** Served by any site: a pattern ending in one of these would block real visitors. */
@@ -61,6 +68,7 @@ final class Rules
         return match (true) {
             str_starts_with($pattern, '*.') => self::TYPE_SUFFIX,
             str_starts_with($pattern, '~') => self::TYPE_CONTAINS,
+            str_starts_with($pattern, '@') => self::TYPE_AGENT,
             default => self::TYPE_PREFIX,
         };
     }
@@ -77,7 +85,7 @@ final class Rules
                 continue;
             }
             $type = self::patternType($pattern);
-            if ($type === self::TYPE_CONTAINS) {
+            if ($type === self::TYPE_CONTAINS || $type === self::TYPE_AGENT) {
                 continue;
             }
             if ($type === self::TYPE_SUFFIX) {
@@ -108,6 +116,25 @@ final class Rules
                 if (str_contains($haystack, substr($pattern, 1))) {
                     return $pattern;
                 }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The stored signature (`@sqlmap`) found in the User-Agent, case-insensitively; null for none or an empty agent.
+     *
+     * @param array<mixed> $patterns
+     */
+    public static function matchedAgent(string $userAgent, array $patterns): ?string
+    {
+        if ($userAgent === '') {
+            return null;
+        }
+        $haystack = strtolower($userAgent);
+        foreach ($patterns as $pattern) {
+            if (is_string($pattern) && self::patternType($pattern) === self::TYPE_AGENT && str_contains($haystack, substr($pattern, 1))) {
+                return $pattern;
             }
         }
         return null;
@@ -148,12 +175,12 @@ final class Rules
         return false;
     }
 
-    /** How a pattern is stored and compared: lowercase, no surrounding spaces, no trailing slash; a fragment's spaces as one. */
+    /** How a pattern is stored and compared: lowercase, no surrounding spaces, no trailing slash; a fragment's or signature's spaces as one. */
     public static function normalizePattern(string $pattern): string
     {
         $pattern = self::lower(trim($pattern));
-        if (str_starts_with($pattern, '~')) {
-            return '~' . preg_replace('/\s+/', ' ', trim(substr($pattern, 1)));
+        if (str_starts_with($pattern, '~') || str_starts_with($pattern, '@')) {
+            return $pattern[0] . preg_replace('/\s+/', ' ', trim(substr($pattern, 1)));
         }
         return strlen($pattern) > 1 ? rtrim($pattern, '/') : $pattern;
     }
@@ -166,6 +193,15 @@ final class Rules
     public static function patternError(string $pattern, array $ownPaths = []): ?string
     {
         $type = self::patternType($pattern);
+        if ($type === self::TYPE_AGENT) {
+            $fragment = substr($pattern, 1);
+            foreach (self::BROWSER_TOKENS as $token) {
+                if ($fragment !== '' && str_contains($token, $fragment)) {
+                    return 'This signature is part of ordinary browsers\' User-Agents';
+                }
+            }
+            return strlen($fragment) >= 4 ? null : 'A signature starts with @ and has at least 4 characters';
+        }
         // A word alone or a path piece would match ordinary requests anywhere: it needs SQL punctuation or two words
         if ($type === self::TYPE_CONTAINS) {
             $fragment = substr($pattern, 1);

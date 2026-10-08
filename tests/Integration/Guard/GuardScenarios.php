@@ -90,6 +90,30 @@ abstract class GuardScenarios extends TestCase
         }
     }
 
+    public function test_a_scanner_signature_blocks_on_an_ordinary_page(): void
+    {
+        $store = $this->createStore();
+        $store->replaceLists(['/.env*', '@sqlmap'], []);
+        $request = RequestContext::fromGlobals(['REMOTE_ADDR' => self::SCANNER, 'REQUEST_METHOD' => 'GET', 'REQUEST_URI' => '/products?id=5', 'HTTP_USER_AGENT' => 'sqlmap/1.8.4#stable (https://sqlmap.org)']);
+
+        $decision = $this->guard($store)->decide($request);
+
+        $this->assertTrue($decision->refuse);
+        $this->assertSame(Decision::TRAPPED, $decision->reason);
+        $this->assertSame('@sqlmap', $decision->pattern);
+        $this->assertTrue($store->read(self::SCANNER)->blocked);
+    }
+
+    public function test_cross_site_does_not_exempt_a_signature(): void
+    {
+        $store = $this->createStore();
+        $store->replaceLists(['@sqlmap'], []);
+        $request = RequestContext::fromGlobals(['REMOTE_ADDR' => self::SCANNER, 'REQUEST_METHOD' => 'GET', 'REQUEST_URI' => '/', 'HTTP_USER_AGENT' => 'sqlmap/1.8', 'HTTP_SEC_FETCH_SITE' => 'cross-site']);
+
+        $this->assertSame(Decision::TRAPPED, $this->guard($store)->decide($request)->reason);
+        $this->assertTrue($store->read(self::SCANNER)->blocked);
+    }
+
     public function test_a_blocked_ip_is_refused_on_every_path_and_records_nothing_more(): void
     {
         $store = $this->storeWithPatterns();

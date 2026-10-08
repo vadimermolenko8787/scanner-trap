@@ -7,7 +7,7 @@ namespace ScannerTrap;
 /** Decoy patterns shipped with the package. */
 final class DefaultPatterns
 {
-    /** Safe for any application: no real site serves these. */
+    /** Safe for any application: no real site serves these paths and no browser sends these User-Agents. */
     public const LIST = [
         '/.env*', '*.env', '/.git', '/.aws', '/.ssh', '/.ds_store', '/.htpasswd', '/.bashrc', '/phpmyadmin', '/pma',
         '/myadmin', '/phpinfo.php', '/vendor/phpunit', '/cgi-bin', '/server-status', '/actuator', '/boaform', '/hnap1',
@@ -15,6 +15,13 @@ final class DefaultPatterns
         '~union select', '~union all select', '~sleep(', '~benchmark(', '~waitfor delay', '~@@version', '~extractvalue(',
         '~updatexml(', '~load_file(', '~into outfile', '~from information_schema', "~' or '", "~' and '", '~" or "',
         '~" and "', "~' or 1", "~' and 1", '~or 1=1', '~and 1=1', "~'1'='1",
+        ...self::SCANNER_AGENTS,
+    ];
+
+    /** User-Agent fragments of scanning tools; no browser sends these. */
+    public const SCANNER_AGENTS = [
+        '@sqlmap', '@nikto', '@nuclei', '@zgrab', '@masscan', '@wpscan', '@gobuster', '@ffuf', '@feroxbuster',
+        '@dirbuster', '@nmap scripting engine', '@acunetix', '@netsparker',
     ];
 
     /** Only for sites that are not WordPress. */

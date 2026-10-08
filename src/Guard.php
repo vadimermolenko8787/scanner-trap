@@ -49,6 +49,11 @@ final class Guard
             return new Decision($this->blocking, Decision::BLOCKED);
         }
         $patterns = $snapshot->patterns ?? $this->fallbackPatterns ?? [];
+        // A scanning tool's User-Agent: no browser sends one, so neither ownPaths nor cross-site apply
+        $agent = Rules::matchedAgent($request->userAgent, $patterns);
+        if ($agent !== null) {
+            return $this->trap($request, $ip, $now, $agent, $request->path());
+        }
         $path = Rules::normalizePath($request->path());
         $pattern = Rules::underOwnPath($path, $this->ownPaths) ? null : Rules::matchedPattern($path, $patterns);
         $pattern ??= Rules::matchedFragment($request->uri, $patterns);
@@ -59,14 +64,20 @@ final class Guard
         if ($request->secFetchSite === 'cross-site') {
             return new Decision($this->blocking, Decision::CROSS_SITE, $pattern);
         }
+        // A fragment is mostly found in the query, which is the evidence then
+        return $this->trap($request, $ip, $now, $pattern, Rules::patternType($pattern) === Rules::TYPE_CONTAINS ? $request->uri : $request->path());
+    }
+
+    /** Blocks the IP for $pattern and records its event; the request is refused if blocking. */
+    private function trap(RequestContext $request, string $ip, int $now, string $pattern, string $evidence): Decision
+    {
         $recorded = $this->store->addBlock(new Block(
             $ip,
             $now,
             $this->blockTtl > 0 ? $now + $this->blockTtl : 0,
             $this->serverName,
             $request->method,
-            // A fragment is mostly found in the query, which is the evidence then
-            Rules::patternType($pattern) === Rules::TYPE_CONTAINS ? $request->uri : $request->path(),
+            $evidence,
             $pattern,
             $request->userAgent,
         ), $this->recordEvents);
