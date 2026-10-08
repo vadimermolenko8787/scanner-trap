@@ -51,10 +51,12 @@ final class FileLocalStoreTest extends LocalStoreContract
     {
         $store = $this->createStore();
         $store->addBlock(new Block('203.0.113.7', time(), 0), true);
+        $store->addBlock(new Block('45.155.205.0/24', time(), 0, source: 'manual'), false);
         $store->replaceLists(['/.env*'], []);
         $store->saveMarker('abc', 1);
 
         $this->assertFileExists($this->dir . '/blocks/' . sha1('203.0.113.7'));
+        $this->assertFileExists($this->dir . '/networks.json');
         $this->assertFileExists($this->dir . '/patterns.json');
         $this->assertFileExists($this->dir . '/allow.json');
         $this->assertFileExists($this->dir . '/events.log');
@@ -114,56 +116,65 @@ final class FileLocalStoreTest extends LocalStoreContract
         $store->addBlock(new Block('203.0.113.7', time(), 0), true);
     }
 
-    public function test_every_network_write_gets_a_new_file_name_so_opcache_cannot_hide_it(): void
-    {
-        $writer = $this->createStore();
-        $reader = $this->createStore();
-        $writer->addBlock(new Block('45.155.205.0/24', time(), 0, source: 'manual'), false);
-        $first = trim((string) file_get_contents($this->dir . '/networks.current'));
-        $this->assertTrue($reader->read('45.155.205.1')->blocked);
-
-        $writer->addBlock(new Block('91.92.248.0/22', time(), 0, source: 'manual'), false);
-        $second = trim((string) file_get_contents($this->dir . '/networks.current'));
-
-        $this->assertMatchesRegularExpression('/^networks-[0-9a-f]{16}\.php$/', $second);
-        $this->assertNotSame($first, $second);
-        $this->assertTrue($reader->read('91.92.249.1')->blocked);
-    }
-
-    public function test_a_corrupt_networks_pointer_or_file_makes_a_corrupt_snapshot(): void
-    {
-        mkdir($this->dir, 0775, true);
-        file_put_contents($this->dir . '/networks.current', '../../etc/passwd');
-        $this->assertTrue($this->createStore()->read('45.155.205.1')->corrupt);
-
-        file_put_contents($this->dir . '/networks.current', 'networks-0123456789abcdef.php');
-        file_put_contents($this->dir . '/networks-0123456789abcdef.php', '<?php return "nope";');
-        $this->assertTrue($this->createStore()->read('45.155.205.1')->corrupt);
-
-        file_put_contents($this->dir . '/networks-0123456789abcdef.php', '<?php syntax error');
-        $this->assertTrue($this->createStore()->read('45.155.205.1')->corrupt);
-    }
-
-    public function test_a_superseded_networks_file_is_kept_for_ten_minutes_after_it_stops_being_current(): void
+    public function test_a_network_block_written_by_another_process_is_seen_despite_the_cache(): void
     {
         $store = $this->createStore();
         $store->addBlock(new Block('45.155.205.0/24', time(), 0, source: 'manual'), false);
-        $first = $this->dir . '/' . trim((string) file_get_contents($this->dir . '/networks.current'));
-        touch($first, time() - 3600);
+        $this->assertTrue($store->read('45.155.205.1')->blocked);
+        $this->assertFalse($store->read('91.92.249.1')->blocked);
 
+        (new FileLocalStore($this->dir))->addBlock(new Block('91.92.248.0/22', time(), 0, source: 'manual'), false);
+        $this->assertTrue($store->read('91.92.249.1')->blocked);
+    }
+
+    public function test_after_a_network_block_and_an_import_the_directory_holds_no_php_file(): void
+    {
+        $store = $this->createStore();
+        $store->addBlock(new Block('45.155.205.0/24', time(), 0, source: 'manual'), false);
+        $store->replaceList('own', ['91.92.248.0/22'], 1000);
+        $store->removeBlock('45.155.205.0/24');
+
+        $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($this->dir, \FilesystemIterator::SKIP_DOTS));
+        foreach ($files as $file) {
+            $this->assertInstanceOf(\SplFileInfo::class, $file);
+            $this->assertNotSame('php', $file->getExtension(), $file->getPathname());
+        }
+    }
+
+    public function test_a_networks_file_without_blocks_is_not_corrupt(): void
+    {
+        $store = $this->createStore();
+        $store->addBlock(new Block('45.155.205.0/24', time(), 0, source: 'manual'), false);
+        $store->removeBlock('45.155.205.0/24');
+        $this->assertFalse($this->createStore()->read('45.155.205.1')->corrupt);
+
+        file_put_contents($this->dir . '/networks.json', '{"blocks":[]}');
+        $snapshot = $this->createStore()->read('45.155.205.1');
+        $this->assertFalse($snapshot->corrupt);
+        $this->assertFalse($snapshot->blocked);
+    }
+
+    public function test_a_networks_file_from_before_networks_json_is_ignored(): void
+    {
+        mkdir($this->dir, 0775, true);
+        $block = (new Block('45.155.205.0/24', time(), 0, source: 'manual'))->toArray();
+        file_put_contents($this->dir . '/networks.current', 'networks-0123456789abcdef.php');
+        file_put_contents($this->dir . '/networks-0123456789abcdef.php', '<?php return ' . var_export(['blocks' => [4 => [24 => ['45.155.205.0' => $block]]]], true) . ';');
+        $store = $this->createStore();
+
+        $this->assertFalse($store->read('45.155.205.1')->corrupt);
+        $this->assertFalse($store->read('45.155.205.1')->blocked);
         $store->addBlock(new Block('91.92.248.0/22', time(), 0, source: 'manual'), false);
-        $second = $this->dir . '/' . trim((string) file_get_contents($this->dir . '/networks.current'));
+        $this->assertTrue($store->read('91.92.249.1')->blocked);
+    }
 
-        $this->assertFileExists($first);
-        $this->assertNotSame($first, $second);
-
-        $stale = $this->dir . '/networks-0123456789abcdef.php';
-        file_put_contents($stale, '<?php return [];');
-        touch($stale, time() - 3600);
-        $store->addBlock(new Block('185.0.0.0/16', time(), 0, source: 'manual'), false);
-
-        $this->assertFileDoesNotExist($stale);
-        $this->assertFileExists($second);
+    public function test_a_corrupt_networks_file_makes_a_corrupt_snapshot(): void
+    {
+        mkdir($this->dir, 0775, true);
+        foreach (['{"oops":', '"nope"', '[1,2]', '{"blocks":"nope"}'] as $garbage) {
+            file_put_contents($this->dir . '/networks.json', $garbage);
+            $this->assertTrue($this->createStore()->read('45.155.205.1')->corrupt, $garbage);
+        }
     }
 
     public function test_a_corrupt_lists_pointer_or_file_makes_a_corrupt_snapshot(): void

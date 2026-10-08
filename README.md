@@ -33,12 +33,9 @@ sync`, or share a group with `umask 002`. Otherwise the web server cannot write 
 round): the trap silently fails open, or sync fails. Configure a PSR-3 `logger`: it is the only way to learn that the
 trap failed open.
 
-The file store directory also holds PHP files that the store includes (`networks-*.php`): make it writable only by the
-web server user, because anything that can write there can run code in your application.
-
-If `networks.current` or `lists.current` in that directory is corrupt, the trap fails open on those lookups. Delete
-the pointer file: network blocks (or imported lists) are then empty until the next network block is written (or the
-next `scanner-trap import`).
+If `networks.json` or `lists.current` in that directory is corrupt, the trap fails open on those lookups. Delete the
+file: network blocks (or imported lists) are then empty until the next network block is written (or the next
+`scanner-trap import`).
 
 ## Several servers sharing one Redis
 

@@ -14,8 +14,7 @@ use ScannerTrap\Snapshot;
 /**
  * A directory: one file per blocked IP, JSON lists, an append-only event log. The lists are decoded once per process
  * and re-read only when the file behind them changes (inode, mtime or size: replaceLists() renames a new file in).
- * Networks live in a PHP file returning an array, renamed under a new name on every write (networks.current points to
- * it): opcache serves it from memory, and a new name is seen even with opcache.validate_timestamps=0.
+ * Networks live in networks.json, read through the same per-process cache.
  * Imported lists: per-source CIDR files and one range file built from them (RangeFile), named by lists.current.
  *
  * @phpstan-type NetworkData array{blocks: array<int, array<int, array<string, array<mixed>>>>}
@@ -30,9 +29,9 @@ final class FileLocalStore implements LocalStore
     private const EVENTS = 'events.log';
     private const OWNER = 'owner';
     private const LOCK = 'sync.lock';
-    private const NETWORKS = 'networks.current';
+    private const NETWORKS = 'networks.json';
     private const NETWORKS_LOCK = 'networks.lock';
-    private const NETWORKS_KEEP = 600;
+    private const LISTS_KEEP = 600;
     private const LISTS_DIR = 'lists';
     private const LISTS = 'lists.current';
     private const LISTS_LOCK = 'lists.lock';
@@ -42,8 +41,6 @@ final class FileLocalStore implements LocalStore
     private static array $cache = [];
     /** @var resource|null */
     private $lock = null;
-    /** @var array{string, NetworkData}|null pointer => data of the last include */
-    private ?array $networksCache = null;
 
     public function __construct(private readonly string $dir)
     {
@@ -227,7 +224,7 @@ final class FileLocalStore implements LocalStore
                 @touch($this->dir . '/' . $previous);
             }
             foreach (glob($this->dir . '/lists-*.bin') ?: [] as $old) {
-                if (basename($old) !== $name && (int) @filemtime($old) < time() - self::NETWORKS_KEEP) {
+                if (basename($old) !== $name && (int) @filemtime($old) < time() - self::LISTS_KEEP) {
                     @unlink($old);
                 }
             }
@@ -404,35 +401,25 @@ final class FileLocalStore implements LocalStore
     }
 
     /** @return NetworkData */
-    private function networks(bool $fresh = false): array
+    private function networks(): array
     {
-        $pointer = @file_get_contents($this->dir . '/' . self::NETWORKS);
-        if ($pointer === false) {
-            return self::NO_NETWORKS;
-        }
-        $pointer = trim($pointer);
-        if (!$fresh && $this->networksCache !== null && $this->networksCache[0] === $pointer) {
-            return $this->networksCache[1];
-        }
-        $file = $this->dir . '/' . $pointer;
-        if (preg_match('/^networks-[0-9a-f]{16}\.php$/', $pointer) !== 1 || !is_file($file)) {
-            throw new StoreException('networks.current does not name a networks file');
-        }
-        try {
-            $data = include $file;
-        } catch (\Throwable $e) {
-            throw new StoreException("Cannot read {$file}: {$e->getMessage()}", 0, $e);
-        }
+        $json = $this->cached(self::NETWORKS);
+        return $json === null ? self::NO_NETWORKS : $this->decodeNetworks($json);
+    }
+
+    /** @return NetworkData */
+    private function decodeNetworks(string $json): array
+    {
+        $data = json_decode($json, true);
         if (!is_array($data) || !is_array($data['blocks'] ?? null)) {
-            throw new StoreException("{$file} does not hold networks");
+            throw new StoreException("{$this->dir}/" . self::NETWORKS . ' does not hold networks');
         }
         /** @var NetworkData $data */
-        $this->networksCache = [$pointer, $data];
         return $data;
     }
 
     /**
-     * Reads the networks afresh under the lock, applies $change and writes the result under a new name; a null from
+     * Reads the networks afresh under the lock, applies $change and writes the result; a null from
      * $change means nothing changed. Expired network blocks are pruned on every write.
      *
      * @param \Closure(NetworkData): (NetworkData|null) $change
@@ -446,7 +433,8 @@ final class FileLocalStore implements LocalStore
         }
         try {
             flock($handle, LOCK_EX);
-            $data = $change($this->networks(true));
+            $json = @file_get_contents($this->dir . '/' . self::NETWORKS);
+            $data = $change($json === false ? self::NO_NETWORKS : $this->decodeNetworks($json));
             if ($data === null) {
                 return false;
             }
@@ -459,23 +447,7 @@ final class FileLocalStore implements LocalStore
                     }
                 }
             }
-            $previous = trim((string) @file_get_contents($this->dir . '/' . self::NETWORKS));
-            $name = 'networks-' . bin2hex(random_bytes(8)) . '.php';
-            $this->writeAtomically($name, '<?php return ' . var_export($data, true) . ";\n");
-            $this->writeAtomically(self::NETWORKS, $name);
-            // The previous file stops being current now: its 10 minutes start here, not when it was written
-            if (preg_match('/^networks-[0-9a-f]{16}\.php\z/', $previous) === 1) {
-                @touch($this->dir . '/' . $previous);
-            }
-            $this->networksCache = null;
-            foreach (glob($this->dir . '/networks-*.php') ?: [] as $old) {
-                if (basename($old) !== $name && (int) @filemtime($old) < time() - self::NETWORKS_KEEP) {
-                    if (function_exists('opcache_invalidate')) {
-                        @opcache_invalidate($old, true);
-                    }
-                    @unlink($old);
-                }
-            }
+            $this->writeAtomically(self::NETWORKS, $this->json($data));
             return true;
         } finally {
             flock($handle, LOCK_UN);
