@@ -13,6 +13,7 @@ use ScannerTrap\Guard;
 use ScannerTrap\RequestContext;
 use ScannerTrap\Store\FileLocalStore;
 use ScannerTrap\Store\LocalStore;
+use ScannerTrap\SubnetPolicy;
 use ScannerTrap\Sync;
 use ScannerTrap\Tests\Support\Env;
 
@@ -198,5 +199,59 @@ final class SyncTest extends TestCase
 
         $this->assertSame([], $this->a->events(10));
         $this->assertSame('203.0.113.9', $this->central->blocks()[0]->ip);
+    }
+
+    public function test_hits_spread_over_two_servers_escalate_centrally_and_reach_both(): void
+    {
+        $policy = new SubnetPolicy();
+        $syncA = new Sync($this->a, $this->central, null, $policy);
+        $syncB = new Sync($this->b, $this->central, null, $policy);
+        $guardA = new Guard($this->a, true, 600, 'web-a', [], ['/.env*'], null, null, true, $policy);
+        $guardB = new Guard($this->b, true, 600, 'web-b', [], ['/.env*'], null, null, true, $policy);
+
+        $guardA->decide(new RequestContext('45.155.205.1', 'GET', '/.env'));
+        $guardB->decide(new RequestContext('45.155.205.2', 'GET', '/.env'));
+        $guardA->decide(new RequestContext('45.155.205.3', 'GET', '/.env'));
+        $this->assertFalse($this->a->read('45.155.205.250')->blocked, 'each server alone stays below the threshold');
+
+        $syncA->run();
+        $syncB->run();
+        $syncA->run();
+
+        $network = array_values(array_filter($this->central->blocks(), static fn (Block $b): bool => $b->isNetwork()));
+        $this->assertCount(1, $network);
+        $this->assertSame([Block::SOURCE_SUBNET, '45.155.205.0/24'], [$network[0]->source, $network[0]->ip]);
+        $this->assertTrue($this->a->read('45.155.205.250')->blocked);
+        $this->assertTrue($this->b->read('45.155.205.250')->blocked);
+    }
+
+    public function test_a_network_block_lifted_centrally_leaves_every_server(): void
+    {
+        $this->central->insertBlocks([new Block('45.155.205.0/24', time(), 0, source: Block::SOURCE_MANUAL)]);
+        (new Sync($this->a, $this->central))->pull();
+        $this->assertTrue($this->a->read('45.155.205.9')->blocked);
+
+        $this->central->lift('45.155.205.0/24', 'ops');
+        (new Sync($this->a, $this->central))->pull();
+
+        $this->assertFalse($this->a->read('45.155.205.9')->blocked);
+    }
+
+    public function test_lists_reach_every_server_and_are_replaced_only_on_a_new_version(): void
+    {
+        $this->central->replaceList('spamhaus-drop', ['45.155.205.0/24'], 1000);
+        (new Sync($this->a, $this->central))->pull();
+        $this->assertSame('spamhaus-drop', $this->a->read('45.155.205.9')->listed);
+        $this->assertSame(1, $this->a->marker()['listsVersion'] ?? null);
+
+        $this->a->replaceList('spamhaus-drop', [], 1000);
+        (new Sync($this->a, $this->central))->pull();
+        $this->assertNull($this->a->read('45.155.205.9')->listed, 'same version: the local copy is left alone');
+
+        $this->central->replaceList('own', ['91.92.248.0/22'], 2000);
+        $this->central->replaceList('spamhaus-drop', [], 2000);
+        (new Sync($this->a, $this->central))->pull();
+        $this->assertSame('own', $this->a->read('91.92.249.1')->listed);
+        $this->assertSame(['own'], array_keys($this->a->listStatus()));
     }
 }

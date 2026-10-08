@@ -31,6 +31,7 @@ final class TrapManager
         private readonly string $serverName = '',
         private readonly int $blockTtl = 604800,
         private readonly ?LoggerInterface $logger = null,
+        private readonly ?SubnetPolicy $subnets = null,
     ) {
     }
 
@@ -218,7 +219,7 @@ final class TrapManager
 
     private function syncer(): Sync
     {
-        return new Sync($this->local, $this->central ?? throw new \LogicException('No central store'), $this->logger);
+        return new Sync($this->local, $this->central ?? throw new \LogicException('No central store'), $this->logger, $this->subnets);
     }
 
     /** @return list<string> the stored list, or the config's while none is stored (Decision 1) */

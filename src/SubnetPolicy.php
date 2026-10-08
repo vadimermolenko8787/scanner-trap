@@ -46,6 +46,11 @@ final class SubnetPolicy
         return new self($int('v4Prefix', 24), $int('v4Threshold', 3), $int('v6Prefix', 64), $int('v6Threshold', 1), $int('window', 86400));
     }
 
+    public function window(): int
+    {
+        return $this->window;
+    }
+
     public function escalationFor(string $ip): ?Escalation
     {
         $address = Network::parse($ip);

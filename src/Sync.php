@@ -11,7 +11,7 @@ use ScannerTrap\Store\LocalStore;
 
 /**
  * Keeps one server's local store and the central store in step: push() ships the blocks made here, pull() brings every
- * server's blocks, the patterns and the whitelist back.
+ * server's blocks (addresses and networks), the patterns, the whitelist and the imported lists back.
  */
 final class Sync
 {
@@ -23,6 +23,7 @@ final class Sync
         private readonly LocalStore $local,
         private readonly CentralStore $central,
         private readonly ?LoggerInterface $logger = null,
+        private readonly ?SubnetPolicy $subnets = null,
     ) {
     }
 
@@ -32,6 +33,7 @@ final class Sync
         $this->assertOwner();
         $pushed = 0;
         $previous = null;
+        $hits = [];
         while (($events = $this->local->events(self::BATCH)) !== []) {
             if (array_keys($events) === $previous) {
                 throw new StoreException('The local store did not drop the events it shipped; nothing more was pushed');
@@ -40,6 +42,14 @@ final class Sync
             $this->central->insertBlocks(array_values($events));
             $this->local->ackEvents(array_map('strval', $previous));
             $pushed += count($events);
+            foreach ($events as $event) {
+                if ($event->source === Block::SOURCE_TRAP && !$event->isNetwork()) {
+                    $hits[] = $event;
+                }
+            }
+        }
+        if ($hits !== []) {
+            $this->escalateCentrally($hits);
         }
         if ($pushed > 0) {
             $this->logger?->info('Scanner trap: pushed {count} block events', ['count' => $pushed]);
@@ -47,14 +57,61 @@ final class Sync
         return $pushed;
     }
 
+    /**
+     * The local stores escalate from their own hits only; here hits of the same network on different servers add up.
+     *
+     * @param list<Block> $hits
+     */
+    private function escalateCentrally(array $hits): void
+    {
+        if ($this->subnets === null) {
+            return;
+        }
+        $newest = [];
+        $thresholds = [];
+        foreach ($hits as $hit) {
+            $escalation = $this->subnets->escalationFor($hit->ip);
+            if ($escalation === null) {
+                continue;
+            }
+            $known = $newest[$escalation->network] ?? null;
+            if ($known === null || $known->blockedAt <= $hit->blockedAt) {
+                $newest[$escalation->network] = $hit;
+                $thresholds[$escalation->network] = $escalation->threshold;
+            }
+        }
+        if ($newest === []) {
+            return;
+        }
+        $counts = [];
+        foreach ($this->central->recentTrapIps(time() - $this->subnets->window()) as $ip) {
+            $network = $this->subnets->escalationFor($ip)?->network;
+            if ($network !== null) {
+                $counts[$network] = ($counts[$network] ?? 0) + 1;
+            }
+        }
+        foreach ($newest as $network => $hit) {
+            if (($counts[$network] ?? 0) >= $thresholds[$network] && $this->central->blocks(true, (string) $network) === []) {
+                $this->central->insertBlocks([Block::forNetwork($hit, (string) $network)]);
+                $this->logger?->info('Scanner trap: {network} blocked after hits from several servers', ['network' => $network]);
+            }
+        }
+    }
+
     public function pull(): void
     {
         $owner = $this->assertOwner();
         $marker = $this->local->marker();
         $version = $this->central->version();
+        $listsVersion = $this->central->listsVersion();
         if ($marker === null || $marker['version'] !== $version) {
             $this->local->replaceLists($this->central->patterns(), $this->central->allowEntries());
-            $this->local->saveMarker($owner, $version, $marker['listsVersion'] ?? -1);
+        }
+        if ($marker === null || $marker['listsVersion'] !== $listsVersion) {
+            $this->pullLists();
+        }
+        if ($marker === null || $marker['version'] !== $version || $marker['listsVersion'] !== $listsVersion) {
+            $this->local->saveMarker($owner, $version, $listsVersion);
         }
 
         $central = [];
@@ -78,6 +135,18 @@ final class Sync
         }
         foreach (array_keys(array_diff_key($local, $central, $pending)) as $ip) {
             $this->local->removeBlock((string) $ip);
+        }
+    }
+
+    /** One source at a time: a large list never sits in memory together with the others. */
+    private function pullLists(): void
+    {
+        $status = $this->central->listStatus();
+        foreach ($status as $source => $entry) {
+            $this->local->replaceList($source, $this->central->listEntries($source), $entry['at']);
+        }
+        foreach (array_keys(array_diff_key($this->local->listStatus(), $status)) as $source) {
+            $this->local->replaceList((string) $source, [], time());
         }
     }
 
