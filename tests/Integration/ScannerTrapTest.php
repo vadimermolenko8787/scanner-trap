@@ -221,4 +221,42 @@ final class ScannerTrapTest extends TestCase
             throw new \LogicException('boom');
         }, 'fallback', $logger));
     }
+
+    public function test_subnet_escalation_is_on_by_default_and_can_be_switched_off(): void
+    {
+        $config = $this->config(['blocking' => true]);
+        foreach (['45.155.205.1', '45.155.205.2', '45.155.205.3'] as $ip) {
+            ScannerTrap::check($config, ['REMOTE_ADDR' => $ip] + self::SCANNER);
+        }
+        $this->assertTrue(ScannerTrap::check($config, ['REMOTE_ADDR' => '45.155.205.250', 'REQUEST_URI' => '/'] + self::SCANNER));
+
+        $off = $this->config(['blocking' => true, 'subnets' => false, 'local' => ['type' => 'file', 'dir' => $this->dir . '/off']]);
+        foreach (['91.92.248.1', '91.92.248.2', '91.92.248.3'] as $ip) {
+            ScannerTrap::check($off, ['REMOTE_ADDR' => $ip] + self::SCANNER);
+        }
+        $this->assertFalse(ScannerTrap::check($off, ['REMOTE_ADDR' => '91.92.248.250', 'REQUEST_URI' => '/'] + self::SCANNER));
+    }
+
+    public function test_a_broken_subnets_config_lets_the_request_through_and_is_logged(): void
+    {
+        $logger = new MemoryLogger();
+
+        $this->assertFalse(ScannerTrap::check($this->config(['subnets' => ['v4Prefix' => 40], 'logger' => $logger]), self::SCANNER));
+        $this->assertNotSame([], $logger->records);
+    }
+
+    public function test_a_garbage_netlens_key_lets_the_request_through_and_is_logged(): void
+    {
+        $redis = Env::phpRedis();
+        $redis->raw('FLUSHDB');
+        $redis->raw('SET', 'scanner-trap:netlens', 'garbage');
+        $logger = new MemoryLogger();
+
+        try {
+            $this->assertFalse(ScannerTrap::check(['local' => Env::redisConfig(), 'blocking' => true, 'logger' => $logger], self::SCANNER));
+            $this->assertNotSame([], $logger->records);
+        } finally {
+            $redis->raw('FLUSHDB');
+        }
+    }
 }

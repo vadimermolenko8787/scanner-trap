@@ -15,6 +15,7 @@ final class Guard
      * @param list<string>|null $fallbackPatterns used while the store has never stored patterns (no central store only)
      * @param list<string>|null $fallbackAllow used while the store has never stored a whitelist (no central store only)
      * @param bool $recordEvents false without a central store: nobody would ever drain the events
+     * @param SubnetPolicy|null $subnets escalation policy for trap and signature hits; null = no escalation
      */
     public function __construct(
         private readonly LocalStore $store,
@@ -26,6 +27,7 @@ final class Guard
         private readonly ?array $fallbackAllow = null,
         private readonly ?LoggerInterface $logger = null,
         private readonly bool $recordEvents = true,
+        private readonly ?SubnetPolicy $subnets = null,
     ) {
     }
 
@@ -46,7 +48,10 @@ final class Guard
             return new Decision(false, Decision::WHITELISTED);
         }
         if ($snapshot->blocked) {
-            return new Decision($this->blocking, Decision::BLOCKED);
+            return new Decision($this->blocking, Decision::BLOCKED, $snapshot->network);
+        }
+        if ($snapshot->listed !== null) {
+            return new Decision($this->blocking, Decision::LISTED, 'list:' . $snapshot->listed);
         }
         $patterns = $snapshot->patterns ?? $this->fallbackPatterns ?? [];
         // A scanning tool's User-Agent: no browser sends one, so neither ownPaths nor cross-site apply
@@ -80,7 +85,7 @@ final class Guard
             $evidence,
             $pattern,
             $request->userAgent,
-        ), $this->recordEvents);
+        ), $this->recordEvents, $this->subnets?->escalationFor($ip));
         if ($recorded) {
             $this->logger?->info('Scanner trap: {ip} blacklisted for {pattern}', ['ip' => $ip, 'pattern' => $pattern, 'uri' => $request->uri]);
         }

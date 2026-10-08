@@ -12,6 +12,8 @@ final class Decision
     /** The store's lists could not be read: let through, logged. */
     public const UNUSABLE = 'unusable';
     public const WHITELISTED = 'whitelisted';
+    /** On an imported list: refused when blocking, never recorded. */
+    public const LISTED = 'listed';
     /** Blacklisted earlier. */
     public const BLOCKED = 'blocked';
     public const NO_MATCH = 'no-match';

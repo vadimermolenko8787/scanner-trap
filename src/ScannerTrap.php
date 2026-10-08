@@ -152,6 +152,7 @@ final class ScannerTrap
             $standalone ? self::stringList($this->config, 'allow', []) : null,
             $this->logger(),
             !$standalone,
+            SubnetPolicy::fromConfig($this->config['subnets'] ?? null),
         );
     }
 

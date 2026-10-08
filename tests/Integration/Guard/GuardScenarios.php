@@ -11,6 +11,7 @@ use ScannerTrap\Block;
 use ScannerTrap\Decision;
 use ScannerTrap\Guard;
 use ScannerTrap\RequestContext;
+use ScannerTrap\SubnetPolicy;
 use ScannerTrap\Store\LocalStore;
 use ScannerTrap\Tests\Support\MemoryLogger;
 
@@ -30,7 +31,7 @@ abstract class GuardScenarios extends TestCase
         return true;
     }
 
-    /** @param array{blocking?: bool, blockTtl?: int, ownPaths?: list<string>, fallbackPatterns?: list<string>, logger?: LoggerInterface} $options */
+    /** @param array{blocking?: bool, blockTtl?: int, ownPaths?: list<string>, fallbackPatterns?: list<string>, logger?: LoggerInterface, subnets?: SubnetPolicy|null} $options */
     protected function guard(LocalStore $store, array $options = []): Guard
     {
         return new Guard(
@@ -42,6 +43,8 @@ abstract class GuardScenarios extends TestCase
             $options['fallbackPatterns'] ?? null,
             null,
             $options['logger'] ?? null,
+            true,
+            $options['subnets'] ?? null,
         );
     }
 
@@ -55,6 +58,86 @@ abstract class GuardScenarios extends TestCase
         $store = $this->createStore();
         $store->replaceLists(self::PATTERNS, []);
         return $store;
+    }
+
+    public function test_a_listed_address_is_refused_only_when_blocking(): void
+    {
+        $store = $this->storeWithPatterns();
+        $store->replaceList('spamhaus-drop', ['45.155.205.0/24'], time());
+
+        $refused = $this->guard($store)->decide($this->request('/', '45.155.205.9'));
+        $watched = $this->guard($store, ['blocking' => false])->decide($this->request('/', '45.155.205.9'));
+
+        $this->assertTrue($refused->refuse);
+        $this->assertSame([Decision::LISTED, 'list:spamhaus-drop'], [$refused->reason, $refused->pattern]);
+        $this->assertFalse($watched->refuse);
+        $this->assertSame(Decision::LISTED, $watched->reason);
+        $this->assertFalse($store->read('45.155.205.9')->blocked, 'a list hit records nothing');
+    }
+
+    public function test_the_whitelist_wins_over_a_list_and_a_network_block(): void
+    {
+        $store = $this->createStore();
+        $store->replaceLists(self::PATTERNS, [new AllowEntry('45.155.205.9'), new AllowEntry('91.92.248.7')]);
+        $store->replaceList('own', ['45.155.205.0/24'], time());
+        $store->addBlock(new Block('91.92.248.0/22', time(), 0, source: 'manual'), false);
+
+        $this->assertSame(Decision::WHITELISTED, $this->guard($store)->decide($this->request('/', '45.155.205.9'))->reason);
+        $this->assertSame(Decision::WHITELISTED, $this->guard($store)->decide($this->request('/', '91.92.248.7'))->reason);
+        $this->assertSame(Decision::BLOCKED, $this->guard($store)->decide($this->request('/', '91.92.248.8'))->reason);
+    }
+
+    public function test_three_trapped_addresses_block_their_slash_24(): void
+    {
+        $store = $this->storeWithPatterns();
+        $guard = $this->guard($store, ['subnets' => new SubnetPolicy()]);
+        foreach (['45.155.205.1', '45.155.205.2', '45.155.205.3'] as $ip) {
+            $guard->decide($this->request('/.env', $ip));
+        }
+
+        $decision = $guard->decide($this->request('/', '45.155.205.250'));
+
+        $this->assertTrue($decision->refuse);
+        $this->assertSame([Decision::BLOCKED, '45.155.205.0/24'], [$decision->reason, $decision->pattern]);
+        $this->assertSame(Decision::NO_MATCH, $guard->decide($this->request('/', '45.155.206.1'))->reason);
+    }
+
+    public function test_one_trapped_ipv6_address_blocks_its_slash_64(): void
+    {
+        $store = $this->storeWithPatterns();
+        $guard = $this->guard($store, ['subnets' => new SubnetPolicy()]);
+        $guard->decide($this->request('/.env', '2a01:4f8:c0c:1234::7'));
+
+        $this->assertTrue($guard->decide($this->request('/', '2a01:4f8:c0c:1234:beef::1'))->refuse);
+        $this->assertFalse($guard->decide($this->request('/', '2a01:4f8:c0c:1235::1'))->refuse);
+    }
+
+    public function test_a_whitelisted_address_inside_an_escalated_network_still_passes(): void
+    {
+        $store = $this->createStore();
+        $store->replaceLists(self::PATTERNS, [new AllowEntry('45.155.205.200')]);
+        $guard = $this->guard($store, ['subnets' => new SubnetPolicy()]);
+        foreach (['45.155.205.1', '45.155.205.2', '45.155.205.3'] as $ip) {
+            $guard->decide($this->request('/.env', $ip));
+        }
+
+        $this->assertTrue($guard->decide($this->request('/', '45.155.205.199'))->refuse);
+        $this->assertFalse($guard->decide($this->request('/', '45.155.205.200'))->refuse);
+    }
+
+    public function test_private_networks_and_cross_site_requests_never_escalate(): void
+    {
+        $store = $this->storeWithPatterns();
+        $guard = $this->guard($store, ['subnets' => new SubnetPolicy()]);
+        foreach (['10.0.0.1', '10.0.0.2', '10.0.0.3'] as $ip) {
+            $guard->decide($this->request('/.env', $ip));
+        }
+        foreach (['91.92.248.1', '91.92.248.2', '91.92.248.3'] as $ip) {
+            $guard->decide($this->request('/.env', $ip, 'cross-site'));
+        }
+
+        $this->assertFalse($guard->decide($this->request('/', '10.0.0.99'))->refuse);
+        $this->assertFalse($guard->decide($this->request('/', '91.92.248.99'))->refuse);
     }
 
     public function test_a_decoy_blocks_the_ip_and_records_the_event(): void
