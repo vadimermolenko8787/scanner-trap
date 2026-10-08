@@ -16,6 +16,12 @@ final class Rules
     public const TYPE_CONTAINS = 'contains';
     private const LOOPBACK = ['127.0.0.0/8', '::1'];
 
+    /** Served by any site: a pattern ending in one of these would block real visitors. */
+    private const SITE_EXTENSIONS = [
+        'js', 'css', 'map', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'avif', 'ico', 'woff', 'woff2', 'ttf', 'otf', 'eot',
+        'php', 'html', 'htm', 'json', 'xml', 'txt', 'pdf',
+    ];
+
     /** One key per address: the IPv6 spellings of one address collapse, so an unblock finds the block. */
     public static function normalizeIp(string $ip): ?string
     {
@@ -137,6 +143,60 @@ final class Rules
         return false;
     }
 
+    /** How a pattern is stored and compared: lowercase, no surrounding spaces, no trailing slash; a fragment's spaces as one. */
+    public static function normalizePattern(string $pattern): string
+    {
+        $pattern = self::lower(trim($pattern));
+        if (str_starts_with($pattern, '~')) {
+            return '~' . preg_replace('/\s+/', ' ', trim(substr($pattern, 1)));
+        }
+        return strlen($pattern) > 1 ? rtrim($pattern, '/') : $pattern;
+    }
+
+    /**
+     * Null when the normalized pattern may be stored, else why not.
+     *
+     * @param array<mixed> $ownPaths
+     */
+    public static function patternError(string $pattern, array $ownPaths = []): ?string
+    {
+        $type = self::patternType($pattern);
+        // A word alone or a path piece would match ordinary requests anywhere: it needs SQL punctuation or two words
+        if ($type === self::TYPE_CONTAINS) {
+            $fragment = substr($pattern, 1);
+            return strlen($fragment) >= 6 && !preg_match('#[/?&]#', $fragment) && preg_match('/[\'"()=@;#]|\S \S/', $fragment)
+                ? null
+                : 'A fragment starts with ~, has at least 6 characters and no / ? or &, and contains a quote, a bracket, =, @, ;, # or two words';
+        }
+        if ($type === self::TYPE_SUFFIX) {
+            if (!preg_match('/^\*\.([a-z0-9_-]{2,}(?:\.[a-z0-9_-]{2,})*)$/', $pattern, $m)) {
+                return 'An extension pattern looks like *.bak or *.php.old, at least two characters per part';
+            }
+            $parts = explode('.', $m[1]);
+            return in_array(end($parts), self::SITE_EXTENSIONS, true) ? 'This extension is one sites serve themselves' : null;
+        }
+        if (!preg_match('#^(/[^/\s?\#*]+)+\*?$#', $pattern)) {
+            return 'A path pattern starts with / and is not / alone; a * may only end it';
+        }
+        // `/.env*`: whatever begins with the part before the *, whole segments or not
+        $literal = rtrim($pattern, '*');
+        $open = $literal !== $pattern;
+        foreach ($ownPaths as $own) {
+            $own = rtrim(self::lower(trim((string) (is_scalar($own) ? $own : ''))), '/');
+            if ($own !== '' && ($literal === $own || str_starts_with($literal, $own . '/') || str_starts_with($own, $literal . ($open ? '' : '/')))) {
+                return 'This pattern covers a path listed in ownPaths';
+            }
+        }
+        return null;
+    }
+
+    /** Null when the entry is an IP, a CIDR range or an IPv4 mask with * for whole octets, else why not. */
+    public static function allowEntryError(string $entry): ?string
+    {
+        $valid = str_contains($entry, '*') ? self::isMask($entry) : self::isIpOrRange($entry);
+        return $valid ? null : 'Use an IP address, a CIDR range like 192.168.0.0/24, or a mask like 192.168.0.*';
+    }
+
     private static function inRange(string $ip, string $range): bool
     {
         $parts = explode('/', $range, 2);
@@ -177,6 +237,30 @@ final class Rules
             }
         }
         return true;
+    }
+
+    private static function isMask(string $entry): bool
+    {
+        $octets = explode('.', $entry);
+        if (count($octets) !== 4) {
+            return false;
+        }
+        foreach ($octets as $octet) {
+            if ($octet !== '*' && !(ctype_digit($octet) && (int) $octet <= 255)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static function isIpOrRange(string $entry): bool
+    {
+        $parts = explode('/', $entry, 2);
+        $packed = filter_var($parts[0], FILTER_VALIDATE_IP) === false ? false : inet_pton($parts[0]);
+        if ($packed === false) {
+            return false;
+        }
+        return count($parts) === 1 || (preg_match('/^\d{1,3}$/', $parts[1]) === 1 && (int) $parts[1] <= strlen($packed) * 8);
     }
 
     private static function lower(string $value): string
