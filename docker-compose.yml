@@ -1,0 +1,16 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: trap
+      MYSQL_USER: trap
+      MYSQL_PASSWORD: trap
+      MYSQL_ROOT_PASSWORD: root
+    ports: ["127.0.0.1:33306:3306"]
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: trap
+      POSTGRES_USER: trap
+      POSTGRES_PASSWORD: trap
+    ports: ["127.0.0.1:55432:5432"]
