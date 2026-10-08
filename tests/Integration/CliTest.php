@@ -118,6 +118,17 @@ final class CliTest extends TestCase
         $this->assertStringNotContainsString('203.0.113.7', $this->cli('list', '--active')[1]);
     }
 
+    public function test_unblock_says_when_nothing_was_blocked_and_when_a_network_still_covers_the_address(): void
+    {
+        $this->writeConfig();
+        $this->cli('block', '45.155.205.0/24');
+        $this->cli('block', '45.155.205.9');
+
+        $this->assertSame("Unblocked.\n45.155.205.9 stays refused: it is inside the blocked network 45.155.205.0/24\n", $this->cli('unblock', '45.155.205.9')[1]);
+        $this->assertSame("That address or network was not blocked.\n", $this->cli('unblock', '91.92.248.0/22')[1]);
+        $this->assertSame("Unblocked.\n", $this->cli('unblock', '45.155.205.0/24')[1]);
+    }
+
     public function test_whitelist_commands(): void
     {
         $this->writeConfig();

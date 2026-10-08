@@ -385,7 +385,7 @@ abstract class LocalStoreContract extends TestCase
     public function test_a_source_name_must_be_a_plain_word(): void
     {
         $store = $this->createStore();
-        foreach (['2024', 'a*b'] as $name) {
+        foreach (['2024', 'a*b', "own\n"] as $name) {
             try {
                 $store->replaceList($name, ['45.155.205.0/24'], 1000);
                 $this->fail("Accepted {$name}");

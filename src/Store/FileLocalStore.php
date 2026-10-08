@@ -182,7 +182,7 @@ final class FileLocalStore implements LocalStore
 
     public function replaceList(string $source, array $networks, int $at): void
     {
-        if (preg_match('/^[a-z][a-z0-9-]{0,31}$/', $source) !== 1) {
+        if (preg_match('/^[a-z][a-z0-9-]{0,31}\z/', $source) !== 1) {
             throw new \InvalidArgumentException("Not a list source name: {$source}");
         }
         $wanted = [];
@@ -464,10 +464,15 @@ final class FileLocalStore implements LocalStore
             $this->writeAtomically($name, '<?php return ' . var_export($data, true) . ";\n");
             $this->writeAtomically(self::NETWORKS, $name);
             // The previous file stops being current now: its 10 minutes start here, not when it was written
-            @touch($this->dir . '/' . $previous);
+            if (preg_match('/^networks-[0-9a-f]{16}\.php\z/', $previous) === 1) {
+                @touch($this->dir . '/' . $previous);
+            }
             $this->networksCache = null;
             foreach (glob($this->dir . '/networks-*.php') ?: [] as $old) {
                 if (basename($old) !== $name && (int) @filemtime($old) < time() - self::NETWORKS_KEEP) {
+                    if (function_exists('opcache_invalidate')) {
+                        @opcache_invalidate($old, true);
+                    }
                     @unlink($old);
                 }
             }

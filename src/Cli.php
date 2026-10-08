@@ -120,7 +120,12 @@ final class Cli
                 $this->say("Blocked {$block->ip}.");
                 break;
             case 'unblock':
-                $this->say($manager->unblock($positional[0], $by) > 0 ? 'Unblocked.' : 'That address was not blocked.');
+                $this->say($manager->unblock($positional[0], $by) > 0 ? 'Unblocked.' : 'That address or network was not blocked.');
+                if (!str_contains($positional[0], '/')) {
+                    foreach ($manager->blocks(true, $positional[0]) as $block) {
+                        $this->say("{$positional[0]} stays refused: it is inside the blocked network {$block->ip}");
+                    }
+                }
                 break;
             case 'import':
                 if (isset($options['source']) && $text('source') === '') {

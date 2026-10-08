@@ -226,6 +226,14 @@ abstract class PdoCentralStoreContract extends TestCase
         $this->assertSame([], $store->blocks());
     }
 
+    public function test_install_seeds_the_lists_version(): void
+    {
+        $this->installed();
+
+        $statement = $this->pdo->query("SELECT value FROM scanner_trap_meta WHERE name = 'lists_version'");
+        $this->assertSame('0', $statement === false ? null : $statement->fetchColumn());
+    }
+
     public function test_network_blocks_lists_networks_only_active_or_with_history(): void
     {
         $store = $this->installed();

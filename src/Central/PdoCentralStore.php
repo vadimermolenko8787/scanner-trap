@@ -16,7 +16,7 @@ use ScannerTrap\Rules;
  */
 final class PdoCentralStore implements CentralStore
 {
-    private const INSERT_BATCH = 500;
+    private const INSERT_BATCH = 300; // 3 variables a row: 900, under SQLite's 999 before 3.32
 
     private readonly string $driver;
 
@@ -54,6 +54,9 @@ final class PdoCentralStore implements CentralStore
             }
             if ($this->meta('version') === null) {
                 $this->execute("INSERT INTO {$this->prefix}meta (name, value) VALUES ('version', '0')", []);
+            }
+            if ($this->meta('lists_version') === null) {
+                $this->execute("INSERT INTO {$this->prefix}meta (name, value) VALUES ('lists_version', '0')", []);
             }
             if ((int) $this->scalar("SELECT COUNT(*) FROM {$this->prefix}pattern", []) === 0) {
                 foreach ($patterns as $pattern) {

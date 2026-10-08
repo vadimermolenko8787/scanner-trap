@@ -51,7 +51,7 @@ final class ListSource
     private static function custom(mixed $item): self
     {
         $name = is_array($item) && is_string($item['name'] ?? null) ? $item['name'] : '';
-        if (preg_match('/^[a-z][a-z0-9-]{0,31}$/', $name) !== 1 || isset(self::PRESETS[$name])) {
+        if (preg_match('/^[a-z][a-z0-9-]{0,31}\z/', $name) !== 1 || isset(self::PRESETS[$name])) {
             throw new \InvalidArgumentException("A list source name is a letter followed by up to 31 of a-z, 0-9 and -, and not a preset name: {$name}");
         }
         /** @var array<mixed> $item */

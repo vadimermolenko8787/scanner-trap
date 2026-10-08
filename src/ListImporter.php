@@ -28,9 +28,6 @@ final class ListImporter
         if ($result['networks'] === []) {
             throw new StoreException("{$source->name} parsed to no networks; the previous entries stay");
         }
-        if (count($result['networks']) > self::MAX_ENTRIES) {
-            throw new RefusedException(sprintf('%s lists more than %d networks; nothing was imported', $source->name, self::MAX_ENTRIES));
-        }
         return $result;
     }
 
@@ -53,6 +50,9 @@ final class ListImporter
                 $reserved++;
             } else {
                 $networks[$network->cidr()] = true;
+                if (count($networks) > self::MAX_ENTRIES) {
+                    throw new RefusedException(sprintf('The list has more than %d networks; nothing was imported', self::MAX_ENTRIES));
+                }
             }
         }
         $networks = array_keys($networks);
@@ -103,6 +103,9 @@ final class ListImporter
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 3,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+            CURLOPT_CONNECTTIMEOUT => 10,
             CURLOPT_TIMEOUT_MS => (int) ($this->timeout * 1000),
             CURLOPT_USERAGENT => self::USER_AGENT,
             CURLOPT_FAILONERROR => true,

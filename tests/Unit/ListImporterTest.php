@@ -97,6 +97,7 @@ final class ListImporterTest extends TestCase
             'not a list' => ['spamhaus-drop'],
             'unknown preset' => [['spamhaus-edrop']],
             'bad name' => [[['name' => 'Own List', 'file' => '/tmp/x']]],
+            'name with a trailing newline' => [[['name' => "own\n", 'file' => '/tmp/x']]],
             'name starting with a digit' => [[['name' => '2024', 'file' => '/tmp/x']]],
             'preset name reused' => [[['name' => 'firehol-level1', 'file' => '/tmp/x']]],
             'duplicate name' => [[['name' => 'own', 'file' => '/tmp/x'], ['name' => 'own', 'file' => '/tmp/y']]],
