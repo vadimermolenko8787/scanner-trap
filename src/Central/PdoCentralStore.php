@@ -19,7 +19,7 @@ final class PdoCentralStore implements CentralStore
 
     public function __construct(private readonly \PDO $pdo, private readonly string $prefix = 'scanner_trap_')
     {
-        if (preg_match('/^[a-z0-9_]*$/i', $prefix) !== 1) {
+        if (preg_match('/^[a-z0-9_]*\z/i', $prefix) !== 1) {
             throw new \InvalidArgumentException('A table prefix may hold letters, digits and _ only');
         }
         $this->pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);

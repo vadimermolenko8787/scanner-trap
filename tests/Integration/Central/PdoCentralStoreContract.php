@@ -158,6 +158,12 @@ abstract class PdoCentralStoreContract extends TestCase
         $this->assertLessThanOrEqual(1024, mb_strlen($store->blocks()[0]->path));
     }
 
+    public function test_a_table_prefix_with_a_trailing_newline_is_refused(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        new PdoCentralStore($this->pdo, "x\n");
+    }
+
     public function test_the_table_prefix_is_honoured(): void
     {
         foreach (['block', 'pattern', 'allow', 'meta'] as $table) {
