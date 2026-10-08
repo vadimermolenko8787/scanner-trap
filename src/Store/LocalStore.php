@@ -51,7 +51,7 @@ interface LocalStore
 
     public function saveMarker(string $owner, int $version): void;
 
-    /** The sync lock, held for at most $seconds; false when another process holds it. */
+    /** The sync lock; false when another process holds it. A store may hold it until unlock() or until the holder exits (file store) rather than for exactly $seconds. */
     public function lock(int $seconds): bool;
 
     public function unlock(): void;

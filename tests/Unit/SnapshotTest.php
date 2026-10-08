@@ -55,6 +55,17 @@ final class SnapshotTest extends TestCase
         $this->assertNull(Block::fromArray(['ip' => 'garbage']));
     }
 
+    public function test_block_text_stays_valid_utf8_within_the_byte_limit(): void
+    {
+        foreach (["\xff" . str_repeat('я', 600), str_repeat('€', 400)] as $path) {
+            $block = new Block('10.0.0.1', 1, 0, path: $path);
+
+            $this->assertSame(1, preg_match('//u', $block->path));
+            $this->assertLessThanOrEqual(1024, strlen($block->path));
+            $this->assertNotFalse(json_encode($block->toArray()));
+        }
+    }
+
     public function test_block_activity_and_ttl(): void
     {
         $forever = new Block('10.0.0.1', 100, 0);

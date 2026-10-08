@@ -16,6 +16,7 @@ use ScannerTrap\Snapshot;
 final class FileLocalStore implements LocalStore
 {
     private const BLOCKS = 'blocks';
+    private const LOCKS = 'locks';
     private const PATTERNS = 'patterns.json';
     private const ALLOW = 'allow.json';
     private const EVENTS = 'events.log';
@@ -39,9 +40,11 @@ final class FileLocalStore implements LocalStore
     public function addBlock(Block $block, bool $recordEvent): bool
     {
         $file = $this->blockFile($block->ip);
-        $this->isBlocked($block->ip); // removes an expired file, so 'x' below can create a new one
         $this->ensureDir($this->dir . '/' . self::BLOCKS);
         $handle = @fopen($file, 'x');
+        if ($handle === false && is_file($file) && $this->removeIfExpired($file)) {
+            $handle = @fopen($file, 'x');
+        }
         if ($handle === false) {
             if (is_file($file)) {
                 return false;
@@ -200,17 +203,42 @@ final class FileLocalStore implements LocalStore
         if (!is_file($file)) {
             return false;
         }
+        return !$this->isExpired($file) || !$this->removeIfExpired($file);
+    }
+
+    private function isExpired(string $file): bool
+    {
         $data = json_decode((string) @file_get_contents($file), true);
         // A file being written right now is still empty: it is a block all the same
-        if (!is_array($data)) {
-            return true;
+        $expires = is_array($data) && is_int($data['expiresAt'] ?? null) ? $data['expiresAt'] : 0;
+        return $expires !== 0 && $expires <= time();
+    }
+
+    /**
+     * The only place an expired block file is deleted. Under a per-IP lock the file is read again, so a fresh block
+     * another process has created meanwhile is never deleted. True when the file is gone, false when it is a live block.
+     */
+    private function removeIfExpired(string $file): bool
+    {
+        $this->ensureDir($this->dir . '/' . self::LOCKS);
+        $handle = @fopen($this->dir . '/' . self::LOCKS . '/' . basename($file), 'c');
+        if ($handle === false) {
+            throw new StoreException("Cannot open a block lock in {$this->dir}");
         }
-        $expires = is_int($data['expiresAt'] ?? null) ? $data['expiresAt'] : 0;
-        if ($expires !== 0 && $expires <= time()) {
+        try {
+            flock($handle, LOCK_EX);
+            if (!is_file($file)) {
+                return true;
+            }
+            if (!$this->isExpired($file)) {
+                return false;
+            }
             @unlink($file);
-            return false;
+            return true;
+        } finally {
+            flock($handle, LOCK_UN);
+            fclose($handle);
         }
-        return true;
     }
 
     private function readBlock(string $file): ?Block
@@ -218,7 +246,7 @@ final class FileLocalStore implements LocalStore
         $data = json_decode((string) @file_get_contents($file), true);
         $block = is_array($data) ? Block::fromArray($data) : null;
         if ($block !== null && !$block->isActive(time())) {
-            @unlink($file);
+            $this->removeIfExpired($file);
             return null;
         }
         return $block;

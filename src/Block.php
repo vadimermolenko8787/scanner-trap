@@ -90,11 +90,15 @@ final class Block
     /** Cut to $max bytes and made valid UTF-8, so JSON and a utf8mb4 column both take it. */
     private static function text(string $value, int $max): string
     {
-        $value = substr($value, 0, $max);
-        if (preg_match('//u', $value) === 1) {
-            return $value;
+        if (preg_match('//u', $value) !== 1) {
+            $decoded = json_decode((string) json_encode($value, JSON_INVALID_UTF8_SUBSTITUTE));
+            $value = is_string($decoded) ? $decoded : '';
         }
-        $decoded = json_decode((string) json_encode($value, JSON_INVALID_UTF8_SUBSTITUTE));
-        return substr(is_string($decoded) ? $decoded : '', 0, $max + 2);
+        $value = substr($value, 0, $max);
+        // The cut may have split a multibyte character: drop its broken head
+        for ($i = 0; $i < 3 && preg_match('//u', $value) !== 1; $i++) {
+            $value = substr($value, 0, -1);
+        }
+        return $value;
     }
 }
