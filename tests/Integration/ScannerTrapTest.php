@@ -5,6 +5,11 @@ declare(strict_types=1);
 namespace ScannerTrap\Tests\Integration;
 
 use PHPUnit\Framework\TestCase;
+use Psr\Log\LoggerInterface;
+use ScannerTrap\Guard;
+use ScannerTrap\RequestContext;
+use ScannerTrap\Snapshot;
+use ScannerTrap\Store\LocalStore;
 use ScannerTrap\Central\PdoCentralStore;
 use ScannerTrap\ScannerTrap;
 use ScannerTrap\Store\FileLocalStore;
@@ -155,5 +160,53 @@ final class ScannerTrapTest extends TestCase
         $this->assertSame('PASSED', $run(['local' => 'garbage'], '203.0.113.7', '/.env'));
         $this->assertSame('PASSED', $run($this->config(['blocking' => true]), '203.0.113.7', '/'));
         $this->assertSame('Forbidden', $run($this->config(['blocking' => true]), '203.0.113.7', '/.env'));
+    }
+
+    public function test_a_deprecation_inside_is_swallowed_and_the_request_is_still_decided(): void
+    {
+        $logger = new MemoryLogger();
+        $store = $this->createStub(LocalStore::class);
+        $store->method('read')->willReturnCallback(static function (): Snapshot {
+            trigger_error('simulated deprecation', E_USER_DEPRECATED);
+            return new Snapshot(true, [], []);
+        });
+
+        $refuse = ScannerTrap::failSafe(
+            static fn (): bool => (new Guard($store, true))->decide(RequestContext::fromGlobals(self::SCANNER))->refuse,
+            false,
+            $logger,
+        );
+
+        $this->assertTrue($refuse);
+        $this->assertSame([], $logger->records);
+    }
+
+    public function test_a_suppressed_warning_inside_stays_silent_and_does_not_fail_the_request_open(): void
+    {
+        $logger = new MemoryLogger();
+        $store = $this->createStub(LocalStore::class);
+        $store->method('read')->willReturnCallback(static function (): Snapshot {
+            @trigger_error('suppressed', E_USER_WARNING);
+            return new Snapshot(true, [], []);
+        });
+
+        $refuse = ScannerTrap::failSafe(
+            static fn (): bool => (new Guard($store, true))->decide(RequestContext::fromGlobals(self::SCANNER))->refuse,
+            false,
+            $logger,
+        );
+
+        $this->assertTrue($refuse);
+        $this->assertSame([], $logger->records);
+    }
+
+    public function test_a_logger_that_throws_does_not_escape_the_fail_safe(): void
+    {
+        $logger = $this->createStub(LoggerInterface::class);
+        $logger->method('error')->willThrowException(new \RuntimeException('logger down'));
+
+        $this->assertSame('fallback', ScannerTrap::failSafe(static function (): never {
+            throw new \LogicException('boom');
+        }, 'fallback', $logger));
     }
 }

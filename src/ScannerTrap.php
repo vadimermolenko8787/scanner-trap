@@ -91,13 +91,12 @@ final class ScannerTrap
         }
         $logger = ($loaded['logger'] ?? null) instanceof LoggerInterface ? $loaded['logger'] : null;
         return (bool) self::failSafe(static function () use ($loaded, $server): bool {
-            $config = $loaded;
-            $request = RequestContext::fromGlobals($server, self::stringList($config, 'trustedProxies', []));
+            $request = RequestContext::fromGlobals($server, self::stringList($loaded, 'trustedProxies', []));
             // Health checks, CLI runs and the server talking to itself must not pay for a store round trip
             if ($request->ip === null || Rules::isLoopback($request->ip)) {
                 return false;
             }
-            return self::fromConfig($config)->createGuard()->decide($request)->refuse;
+            return self::fromConfig($loaded)->createGuard()->decide($request)->refuse;
         }, false, $logger);
     }
 
@@ -110,7 +109,11 @@ final class ScannerTrap
     public static function failSafe(\Closure $work, mixed $fallback, ?LoggerInterface $logger): mixed
     {
         set_error_handler(static function (int $severity, string $message, string $file, int $line): bool {
-            if (($severity & (E_DEPRECATED | E_USER_DEPRECATED)) !== 0 || (error_reporting() & ~self::FATAL_LEVELS) === 0) {
+            // Swallowed, so PHP's own handler cannot print them into the response
+            if (($severity & (E_DEPRECATED | E_USER_DEPRECATED)) !== 0) {
+                return true;
+            }
+            if ((error_reporting() & ~self::FATAL_LEVELS) === 0) {
                 return false;
             }
             throw new \ErrorException($message, 0, $severity, $file, $line);
@@ -118,7 +121,11 @@ final class ScannerTrap
         try {
             return $work();
         } catch (\Throwable $e) {
-            $logger?->error('Scanner trap failed, the request was let through: {message}', ['message' => $e->getMessage(), 'exception' => $e]);
+            try {
+                $logger?->error('Scanner trap failed, the request was let through: {message}', ['message' => $e->getMessage(), 'exception' => $e]);
+            } catch (\Throwable) {
+                // A broken logger must not turn a fail-open into an error
+            }
             return $fallback;
         } finally {
             restore_error_handler();
