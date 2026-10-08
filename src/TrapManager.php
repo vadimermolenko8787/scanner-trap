@@ -76,13 +76,15 @@ final class TrapManager
     public function blocks(bool $activeOnly = true, ?string $ip = null): array
     {
         $this->assertManageable();
-        $all = $this->central !== null ? $this->central->blocks($activeOnly, null, 1_000_000) : $this->local->blocks();
         if ($ip === null) {
-            return $all;
+            return $this->central !== null ? $this->central->blocks($activeOnly) : $this->local->blocks();
         }
         $target = self::target($ip) ?? $ip;
-        return array_values(array_filter($all, static fn (Block $b): bool => $b->ip === $target
-            || ($b->isNetwork() && !str_contains($target, '/') && Network::parse($b->ip)?->contains($target) === true)));
+        $covers = static fn (Block $b): bool => $b->isNetwork() && !str_contains($target, '/') && Network::parse($b->ip)?->contains($target) === true;
+        if ($this->central !== null) {
+            return [...$this->central->blocks($activeOnly, $target), ...array_filter($this->central->networkBlocks($activeOnly), $covers)];
+        }
+        return array_values(array_filter($this->local->blocks(), static fn (Block $b): bool => $b->ip === $target || $covers($b)));
     }
 
     public function block(string $ip, string $reason, ?int $ttl, string $by): Block

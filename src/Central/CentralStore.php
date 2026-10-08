@@ -30,6 +30,9 @@ interface CentralStore
     /** @return list<Block> newest first; `$ip` may be an IP or a CIDR */
     public function blocks(bool $activeOnly = true, ?string $ip = null, int $limit = 1000): array;
 
+    /** @return list<Block> every network block (the active ones, or with `$activeOnly` false the history too), newest first */
+    public function networkBlocks(bool $activeOnly = true): array;
+
     /** Lifts every active block of the IP or CIDR; returns how many. */
     public function lift(string $ip, string $by): int;
 

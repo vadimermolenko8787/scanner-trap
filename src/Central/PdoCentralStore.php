@@ -111,18 +111,33 @@ final class PdoCentralStore implements CentralStore
 
     public function blocks(bool $activeOnly = true, ?string $ip = null, int $limit = 1000): array
     {
-        return $this->guarded(function () use ($activeOnly, $ip, $limit): array {
-            $where = [];
-            $params = [];
+        $where = [];
+        $params = [];
+        if ($ip !== null) {
+            $where[] = 'ip = ?';
+            $params[] = self::target($ip);
+        }
+        return $this->selectBlocks($activeOnly, $where, $params, ' LIMIT ' . max(1, $limit));
+    }
+
+    public function networkBlocks(bool $activeOnly = true): array
+    {
+        return $this->selectBlocks($activeOnly, ["ip LIKE '%/%'"], [], '');
+    }
+
+    /**
+     * @param list<string> $where
+     * @param list<mixed> $params
+     * @return list<Block>
+     */
+    private function selectBlocks(bool $activeOnly, array $where, array $params, string $limit): array
+    {
+        return $this->guarded(function () use ($activeOnly, $where, $params, $limit): array {
             if ($activeOnly) {
-                $where[] = 'lifted_at IS NULL AND (expires_at IS NULL OR expires_at > ?)';
-                $params[] = time();
+                array_unshift($where, 'lifted_at IS NULL AND (expires_at IS NULL OR expires_at > ?)');
+                array_unshift($params, time());
             }
-            if ($ip !== null) {
-                $where[] = 'ip = ?';
-                $params[] = self::target($ip);
-            }
-            $sql = "SELECT * FROM {$this->prefix}block" . ($where ? ' WHERE ' . implode(' AND ', $where) : '') . ' ORDER BY id DESC LIMIT ' . max(1, $limit);
+            $sql = "SELECT * FROM {$this->prefix}block" . ($where ? ' WHERE ' . implode(' AND ', $where) : '') . ' ORDER BY id DESC' . $limit;
             $blocks = [];
             foreach ($this->rows($sql, $params) as $row) {
                 $block = Block::fromArray([

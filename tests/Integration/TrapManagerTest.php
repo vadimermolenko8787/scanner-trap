@@ -403,6 +403,24 @@ final class TrapManagerTest extends TestCase
         $this->assertSame('own', $this->local->read('185.220.101.9')->listed);
     }
 
+    public function test_the_block_list_is_capped_and_an_ip_still_finds_its_blocks_in_the_central_store(): void
+    {
+        $manager = $this->installed(true);
+        $manager->block('45.155.205.0/24', 'abuse', null, 'ops');
+        $manager->block('91.92.248.0/22', 'abuse', null, 'ops');
+        $manager->block('45.155.205.9', 'exact', null, 'ops');
+        $many = [];
+        for ($i = 0; $i < 1100; $i++) {
+            $many[] = new Block(sprintf('198.51.%d.%d', intdiv($i, 250), $i % 250 + 1), time(), 0);
+        }
+        $this->central?->insertBlocks($many);
+
+        $this->assertCount(1000, $manager->blocks());
+        $this->assertEqualsCanonicalizing(['45.155.205.9', '45.155.205.0/24'], array_map(static fn (Block $b): string => $b->ip, $manager->blocks(true, '45.155.205.9')));
+        $this->assertSame(['91.92.248.0/22'], array_map(static fn (Block $b): string => $b->ip, $manager->blocks(true, '91.92.249.1')));
+        $this->assertSame(['198.51.0.1'], array_map(static fn (Block $b): string => $b->ip, $manager->blocks(true, '198.51.0.1')));
+    }
+
     public function test_a_failing_pull_keeps_the_import_outcome(): void
     {
         $real = new PdoCentralStore(Env::pdo('sqlite'));

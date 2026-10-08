@@ -226,6 +226,20 @@ abstract class PdoCentralStoreContract extends TestCase
         $this->assertSame([], $store->blocks());
     }
 
+    public function test_network_blocks_lists_networks_only_active_or_with_history(): void
+    {
+        $store = $this->installed();
+        $store->insertBlocks([
+            new Block('45.155.205.0/24', time(), 0, source: Block::SOURCE_SUBNET),
+            new Block('91.92.248.0/22', time(), 0, source: Block::SOURCE_MANUAL),
+            new Block('45.155.205.9', time(), 0),
+        ]);
+        $store->lift('91.92.248.0/22', 'ops');
+
+        $this->assertSame(['45.155.205.0/24'], array_map(static fn (Block $b): string => $b->ip, $store->networkBlocks()));
+        $this->assertSame(['91.92.248.0/22', '45.155.205.0/24'], array_map(static fn (Block $b): string => $b->ip, $store->networkBlocks(false)));
+    }
+
     public function test_recent_trap_ips_are_active_trap_blocks_of_addresses_only(): void
     {
         $store = $this->installed();

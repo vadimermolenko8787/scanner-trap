@@ -304,6 +304,11 @@ final class SyncTest extends TestCase
                 return $this->inner->blocks($activeOnly, $ip, $limit);
             }
 
+            public function networkBlocks(bool $activeOnly = true): array
+            {
+                return $this->inner->networkBlocks($activeOnly);
+            }
+
             public function lift(string $ip, string $by): int
             {
                 return $this->inner->lift($ip, $by);
