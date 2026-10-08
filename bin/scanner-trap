@@ -1,0 +1,17 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+// Inside the package's own checkout, or installed under vendor/vadimermolenko8787/scanner-trap
+foreach ([__DIR__ . '/../vendor/autoload.php', __DIR__ . '/../../../autoload.php'] as $autoload) {
+    if (is_file($autoload)) {
+        require $autoload;
+        break;
+    }
+}
+if (!class_exists(\ScannerTrap\Cli::class)) {
+    fwrite(STDERR, "scanner-trap: no Composer autoloader found; run composer install\n");
+    exit(3);
+}
+exit(\ScannerTrap\Cli::main($argv));
