@@ -18,3 +18,4 @@ All notable changes to this project are documented here. The project follows [Se
 ### Changed
 * The six SQL fragments that search text can contain (`' or '`, `' and '`, `" or "`, `" and "`, `sleep(`, `benchmark(`) moved from `DefaultPatterns::LIST` to `DefaultPatterns::LOOSE_FRAGMENTS`. A stored pattern list keeps them until `scanner-trap pattern:remove`.
 * The file store keeps network blocks in `networks.json`; no PHP file is written any more. A leftover `networks.current` and `networks-*.php` are ignored and may be deleted.
+* List downloads are capped at 16 MB per location; a larger one fails that source and keeps its previous entries.

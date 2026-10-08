@@ -10,6 +10,8 @@ use ScannerTrap\Exception\RefusedException;
 use ScannerTrap\Exception\StoreException;
 use ScannerTrap\ListImporter;
 use ScannerTrap\ListSource;
+use ScannerTrap\Store\FileLocalStore;
+use ScannerTrap\TrapManager;
 
 final class ListImporterTest extends TestCase
 {
@@ -113,5 +115,27 @@ final class ListImporterTest extends TestCase
     {
         $this->expectException(\InvalidArgumentException::class);
         ListSource::fromConfig($config);
+    }
+
+    public function test_a_file_over_the_cap_is_refused_and_the_error_reaches_the_import_report(): void
+    {
+        $file = tempnam(sys_get_temp_dir(), 'list-');
+        file_put_contents((string) $file, str_repeat("45.155.205.1\n", 10)); // 130 bytes
+        $source = ListSource::fromConfig([['name' => 'own', 'file' => (string) $file]])[0];
+        $dir = sys_get_temp_dir() . '/scanner-trap-test-' . bin2hex(random_bytes(6));
+        try {
+            try {
+                (new ListImporter(maxBytes: 100))->import($source);
+                $this->fail('No exception');
+            } catch (StoreException $e) {
+                $this->assertSame("{$file} is larger than 100 bytes; the previous entries stay", $e->getMessage());
+            }
+            $manager = new TrapManager(new FileLocalStore($dir), null, [], [], listSources: [$source], importer: new ListImporter(maxBytes: 100));
+            $this->assertSame("{$file} is larger than 100 bytes; the previous entries stay", $manager->import()['own']['error']);
+            $this->assertSame(['45.155.205.1/32'], (new ListImporter(maxBytes: 130))->import($source)['networks']);
+        } finally {
+            @unlink((string) $file);
+            exec('rm -rf ' . escapeshellarg($dir));
+        }
     }
 }

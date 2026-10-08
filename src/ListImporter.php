@@ -7,13 +7,13 @@ namespace ScannerTrap;
 use ScannerTrap\Exception\RefusedException;
 use ScannerTrap\Exception\StoreException;
 
-/** Fetches a list source (ext-curl when loaded, else PHP streams) and keeps what is safe to refuse: valid, public, not absurdly wide networks. */
+/** Fetches a list source (ext-curl when loaded, else PHP streams) and keeps what is safe to refuse: valid, public, not absurdly wide networks. A location larger than the cap is refused. */
 final class ListImporter
 {
     public const MAX_ENTRIES = 200_000;
     private const USER_AGENT = 'scanner-trap (+https://github.com/vadimermolenko8787/scanner-trap)';
 
-    public function __construct(private readonly float $timeout = 30.0, private readonly bool $useCurl = true)
+    public function __construct(private readonly float $timeout = 30.0, private readonly bool $useCurl = true, private readonly int $maxBytes = 16_777_216)
     {
     }
 
@@ -85,6 +85,9 @@ final class ListImporter
         if (preg_match('#^https?://#i', $location) === 1) {
             $body = $this->useCurl && extension_loaded('curl') ? $this->fetchWithCurl($location) : $this->fetchWithStreams($location);
         } else {
+            if (is_file($location) && filesize($location) > $this->maxBytes) {
+                throw $this->tooLarge($location);
+            }
             $body = is_file($location) ? @file_get_contents($location) : false;
         }
         if ($body === false || trim($body) === '') {
@@ -99,8 +102,9 @@ final class ListImporter
         if ($curl === false) {
             return false;
         }
+        $body = '';
+        $over = false;
         curl_setopt_array($curl, [
-            CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 3,
             CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
@@ -109,10 +113,23 @@ final class ListImporter
             CURLOPT_TIMEOUT_MS => (int) ($this->timeout * 1000),
             CURLOPT_USERAGENT => self::USER_AGENT,
             CURLOPT_FAILONERROR => true,
+            CURLOPT_MAXFILESIZE => $this->maxBytes,
+            CURLOPT_WRITEFUNCTION => function ($curl, string $chunk) use (&$body, &$over): int {
+                if (strlen($body) + strlen($chunk) > $this->maxBytes) {
+                    $over = true;
+                    return 0; // aborts the transfer
+                }
+                $body .= $chunk;
+                return strlen($chunk);
+            },
         ]);
-        $body = curl_exec($curl);
+        $ok = curl_exec($curl);
+        $exceeded = curl_errno($curl) === CURLE_FILESIZE_EXCEEDED;
         curl_close($curl);
-        return is_string($body) ? $body : false;
+        if ($over || $exceeded) {
+            throw $this->tooLarge($url);
+        }
+        return $ok === true ? $body : false;
     }
 
     /** Needs allow_url_fopen; a server without it and without ext-curl cannot fetch URLs (files still work). */
@@ -127,6 +144,21 @@ final class ListImporter
             'follow_location' => 1,
             'max_redirects' => 3,
         ]]);
-        return @file_get_contents($url, false, $context);
+        $handle = @fopen($url, 'r', false, $context);
+        if ($handle === false) {
+            return false;
+        }
+        $body = stream_get_contents($handle, $this->maxBytes + 1);
+        fclose($handle);
+        if ($body !== false && strlen($body) > $this->maxBytes) {
+            throw $this->tooLarge($url);
+        }
+        return $body;
+    }
+
+    private function tooLarge(string $location): StoreException
+    {
+        $cap = $this->maxBytes % 1_048_576 === 0 ? intdiv($this->maxBytes, 1_048_576) . ' MB' : "{$this->maxBytes} bytes";
+        return new StoreException("{$location} is larger than {$cap}; the previous entries stay");
     }
 }
