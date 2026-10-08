@@ -12,25 +12,50 @@ use ScannerTrap\Network;
 use ScannerTrap\Redis\RedisConnection;
 use ScannerTrap\Snapshot;
 
-/** Keys {prefix}block:<ip>, net:<cidr>, netlens (set of prefix tokens), patterns, allow, events (stream), owner, sync-lock. One EVAL per request. */
+/** Keys {prefix}block:<ip>, net:<cidr>, netlens (set of prefix tokens), lh:<source>:<generation> (list entries), lists (source => status), lists:seq, patterns, allow, events (stream), owner, sync-lock. One EVAL per request. */
 final class RedisLocalStore implements LocalStore
 {
     private const EVENTS_MAX_LENGTH = '10000';
-    /** ARGV: prefix, then token/cidr pairs of the IP's networks; only tokens in netlens are looked up. Reply slot 5 (list source) is filled in Task 5. */
+    /**
+     * ARGV: prefix, then token/cidr pairs of the IP's networks. Network blocks are looked up at the lengths in netlens,
+     * list entries per active source at that source's lengths.
+     */
     private const READ_SCRIPT = <<<'LUA'
         local reply = {redis.call('EXISTS', KEYS[1]), redis.call('GET', KEYS[2]), redis.call('GET', KEYS[3]), false, false}
-        local lens = redis.call('SMEMBERS', KEYS[4])
-        if #lens == 0 then return reply end
-        local wanted = {}
-        for _, token in ipairs(lens) do wanted[token] = true end
-        for i = 2, #ARGV, 2 do
-            if wanted[ARGV[i]] then
-                local cidr = ARGV[i + 1]
-                if redis.call('EXISTS', ARGV[1] .. 'net:' .. cidr) == 1 then reply[4] = cidr break end
+        local candidates = {}
+        for i = 2, #ARGV, 2 do candidates[ARGV[i]] = ARGV[i + 1] end
+        for _, token in ipairs(redis.call('SMEMBERS', KEYS[4])) do
+            local cidr = candidates[token]
+            if cidr and redis.call('EXISTS', ARGV[1] .. 'net:' .. cidr) == 1 then reply[4] = cidr break end
+        end
+        local lists = redis.call('HGETALL', KEYS[5])
+        for j = 1, #lists, 2 do
+            local info = cjson.decode(lists[j + 1])
+            local key = ARGV[1] .. 'lh:' .. lists[j] .. ':' .. info.gen
+            for _, token in ipairs(info.lens) do
+                local cidr = candidates[token]
+                if cidr and redis.call('HEXISTS', key, cidr) == 1 then reply[5] = lists[j] break end
             end
+            if reply[5] then break end
         end
         return reply
         LUA;
+    /** KEYS: lists, the new generation's hash. ARGV: source, status JSON ('' removes the source), prefix. */
+    private const SWITCH_SCRIPT = <<<'LUA'
+        local old = redis.call('HGET', KEYS[1], ARGV[1])
+        if ARGV[2] == '' then
+            redis.call('HDEL', KEYS[1], ARGV[1])
+            redis.call('UNLINK', KEYS[2])
+        else
+            redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+        end
+        if old then
+            local oldKey = ARGV[3] .. 'lh:' .. ARGV[1] .. ':' .. cjson.decode(old).gen
+            if oldKey ~= KEYS[2] then redis.call('UNLINK', oldKey) end
+        end
+        return 1
+        LUA;
+    private const LIST_CHUNK = 5000;
     /** Of a scanner's parallel requests only the one whose SET created the key records an event. ARGV: 1 block JSON, 2 TTL, 3 record event, 4 stream cap, 5 netlens token or '', 6 escalate, 7 IP, 8 now, 9 window, 10 threshold, 11 network block JSON, 12 network TTL, 13 network token; KEYS 4 and 5 (counter, network key) only with escalation. */
     private const BLOCK_SCRIPT = <<<'LUA'
         local created
@@ -70,7 +95,7 @@ final class RedisLocalStore implements LocalStore
             $args[] = $token;
             $args[] = $cidr;
         }
-        $reply = $this->redis->eval(self::READ_SCRIPT, [$this->key('block:' . $ip), $this->key('patterns'), $this->key('allow'), $this->key('netlens')], $args);
+        $reply = $this->redis->eval(self::READ_SCRIPT, [$this->key('block:' . $ip), $this->key('patterns'), $this->key('allow'), $this->key('netlens'), $this->key('lists')], $args);
         if (!is_array($reply) || count($reply) !== 5) {
             throw new StoreException('Unexpected reply to the read script');
         }
@@ -104,7 +129,18 @@ final class RedisLocalStore implements LocalStore
 
     public function blocks(): array
     {
-        return [...$this->scanBlocks($this->key('block:*')), ...$this->scanBlocks($this->key('net:*'))];
+        $blocks = [];
+        foreach (array_chunk([...$this->scanKeys($this->key('block:*')), ...$this->scanKeys($this->key('net:*'))], 500) as $keys) {
+            $values = $this->redis->raw('MGET', ...$keys);
+            foreach (is_array($values) ? $values : [] as $value) {
+                $data = is_string($value) ? json_decode($value, true) : null;
+                $block = is_array($data) ? Block::fromArray($data) : null;
+                if ($block !== null && $block->isActive(time())) {
+                    $blocks[] = $block;
+                }
+            }
+        }
+        return $blocks;
     }
 
     public function removeBlock(string $target): void
@@ -135,6 +171,53 @@ final class RedisLocalStore implements LocalStore
             $this->key('allow'),
             $this->json(array_map(static fn (AllowEntry $e): array => $e->toArray(), $allow)),
         );
+    }
+
+    /** No command holds Redis for long: the new generation is written in chunks, then switched to in one short script. */
+    public function replaceList(string $source, array $networks, int $at): void
+    {
+        $wanted = [];
+        foreach ($networks as $cidr) {
+            $network = Network::parse($cidr);
+            if ($network !== null) {
+                $wanted[$network->cidr()] = $network->token();
+            }
+        }
+        $generation = $this->redis->raw('INCR', $this->key('lists:seq'));
+        $generation = is_int($generation) ? $generation : 0;
+        $hash = $this->key("lh:{$source}:{$generation}");
+        foreach (array_chunk(array_keys($wanted), self::LIST_CHUNK) as $chunk) {
+            $fields = [];
+            foreach ($chunk as $cidr) {
+                array_push($fields, (string) $cidr, '1');
+            }
+            $this->redis->raw('HSET', $hash, ...$fields);
+        }
+        $lens = array_values(array_unique($wanted));
+        sort($lens);
+        $status = $wanted === [] ? '' : $this->json(['gen' => $generation, 'count' => count($wanted), 'at' => $at, 'lens' => $lens]);
+        $this->redis->eval(self::SWITCH_SCRIPT, [$this->key('lists'), $hash], [$source, $status, $this->prefix]);
+        // A crashed earlier import may have left a generation behind
+        foreach ($this->scanKeys($this->key("lh:{$source}:*")) as $key) {
+            if ($key !== $hash) {
+                $this->redis->raw('UNLINK', $key);
+            }
+        }
+    }
+
+    public function listStatus(): array
+    {
+        $reply = $this->redis->raw('HGETALL', $this->key('lists'));
+        $pairs = is_array($reply) ? array_values($reply) : [];
+        $status = [];
+        for ($i = 0; $i + 1 < count($pairs); $i += 2) {
+            $data = is_string($pairs[$i + 1]) ? json_decode($pairs[$i + 1], true) : null;
+            if (is_string($pairs[$i]) && is_array($data) && is_int($data['count'] ?? null) && is_int($data['at'] ?? null)) {
+                $status[$pairs[$i]] = ['count' => $data['count'], 'at' => $data['at']];
+            }
+        }
+        ksort($status);
+        return $status;
     }
 
     public function events(int $limit): array
@@ -183,12 +266,12 @@ final class RedisLocalStore implements LocalStore
         if (!is_array($data) || !is_string($data['owner'] ?? null) || !is_int($data['version'] ?? null)) {
             return null;
         }
-        return ['owner' => $data['owner'], 'version' => $data['version']];
+        return ['owner' => $data['owner'], 'version' => $data['version'], 'listsVersion' => is_int($data['listsVersion'] ?? null) ? $data['listsVersion'] : -1];
     }
 
-    public function saveMarker(string $owner, int $version): void
+    public function saveMarker(string $owner, int $version, int $listsVersion = -1): void
     {
-        $this->redis->raw('SET', $this->key('owner'), $this->json(['owner' => $owner, 'version' => $version]));
+        $this->redis->raw('SET', $this->key('owner'), $this->json(['owner' => $owner, 'version' => $version, 'listsVersion' => $listsVersion]));
     }
 
     public function lock(int $seconds): bool
@@ -209,10 +292,10 @@ final class RedisLocalStore implements LocalStore
         }
     }
 
-    /** @return list<Block> the active blocks under the keys matching $match */
-    private function scanBlocks(string $match): array
+    /** @return list<string> the keys matching $match */
+    private function scanKeys(string $match): array
     {
-        $blocks = [];
+        $found = [];
         $cursor = '0';
         do {
             $reply = $this->redis->raw('SCAN', $cursor, 'MATCH', $match, 'COUNT', '500');
@@ -220,18 +303,9 @@ final class RedisLocalStore implements LocalStore
                 throw new StoreException('Unexpected reply to SCAN');
             }
             [$cursor, $keys] = $reply;
-            if ($keys !== []) {
-                $values = $this->redis->raw('MGET', ...array_filter($keys, 'is_string'));
-                foreach (is_array($values) ? $values : [] as $value) {
-                    $data = is_string($value) ? json_decode($value, true) : null;
-                    $block = is_array($data) ? Block::fromArray($data) : null;
-                    if ($block !== null && $block->isActive(time())) {
-                        $blocks[] = $block;
-                    }
-                }
-            }
+            array_push($found, ...array_filter($keys, 'is_string'));
         } while ($cursor !== '0');
-        return $blocks;
+        return array_values(array_unique($found));
     }
 
     private function targetKey(string $target): string

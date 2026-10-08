@@ -91,4 +91,18 @@ class PhpRedisLocalStoreTest extends LocalStoreContract
         $this->assertSame(1, $this->redis->raw('EXISTS', 'scanner-trap:net:45.155.205.0/24'));
         $this->assertSame(['4/24'], $this->redis->raw('SMEMBERS', 'scanner-trap:netlens'));
     }
+
+    public function test_an_import_writes_a_new_generation_and_frees_the_old_one(): void
+    {
+        $store = $this->createStore();
+        $store->replaceList('own', ['45.155.205.0/24'], 1000);
+        $first = $this->redis->raw('KEYS', 'scanner-trap:lh:own:*');
+        $store->replaceList('own', ['91.92.248.0/22'], 2000);
+        $second = $this->redis->raw('KEYS', 'scanner-trap:lh:own:*');
+
+        $this->assertIsArray($first);
+        $this->assertIsArray($second);
+        $this->assertCount(1, $second);
+        $this->assertNotSame($first, $second);
+    }
 }

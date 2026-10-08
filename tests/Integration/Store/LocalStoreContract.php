@@ -127,7 +127,7 @@ abstract class LocalStoreContract extends TestCase
         $this->assertNull($store->marker());
 
         $store->saveMarker('abc123', 7);
-        $this->assertSame(['owner' => 'abc123', 'version' => 7], $this->createStore()->marker());
+        $this->assertSame(['owner' => 'abc123', 'version' => 7, 'listsVersion' => -1], $this->createStore()->marker());
     }
 
     public function test_the_sync_lock_is_exclusive_until_released(): void
@@ -286,5 +286,81 @@ abstract class LocalStoreContract extends TestCase
     protected function keepsEvents(): bool
     {
         return true;
+    }
+
+    public function test_a_listed_network_is_reported_but_not_blocked(): void
+    {
+        $store = $this->createStore();
+        $store->replaceList('spamhaus-drop', ['45.155.205.0/24', '2a01:4f8:c0c:1234::/64'], 1000);
+
+        $v4 = $this->createStore()->read('45.155.205.77');
+        $this->assertFalse($v4->blocked);
+        $this->assertSame('spamhaus-drop', $v4->listed);
+        $this->assertSame('spamhaus-drop', $store->read('2a01:4f8:c0c:1234::9')->listed);
+        $this->assertNull($store->read('45.155.206.1')->listed);
+        $this->assertSame(['spamhaus-drop' => ['count' => 2, 'at' => 1000]], $store->listStatus());
+    }
+
+    public function test_a_new_import_replaces_the_sources_networks(): void
+    {
+        $store = $this->createStore();
+        $store->replaceList('own', ['45.155.205.0/24', '91.92.248.0/22'], 1000);
+        $store->replaceList('own', ['91.92.248.0/22', '185.220.101.0/24'], 2000);
+
+        $this->assertNull($store->read('45.155.205.77')->listed);
+        $this->assertSame('own', $store->read('91.92.250.1')->listed);
+        $this->assertSame('own', $store->read('185.220.101.5')->listed);
+        $this->assertSame(['own' => ['count' => 2, 'at' => 2000]], $store->listStatus());
+    }
+
+    public function test_a_network_stays_listed_while_any_source_lists_it(): void
+    {
+        $store = $this->createStore();
+        $store->replaceList('a', ['45.155.205.0/24'], 1000);
+        $store->replaceList('b', ['45.155.205.0/24'], 1000);
+        $store->replaceList('a', [], 2000);
+
+        $this->assertSame('b', $store->read('45.155.205.1')->listed);
+        $this->assertSame(['b'], array_keys($store->listStatus()));
+        $store->replaceList('b', [], 2000);
+        $this->assertNull($store->read('45.155.205.1')->listed);
+        $this->assertSame([], $store->listStatus());
+    }
+
+    public function test_lists_and_network_blocks_are_independent(): void
+    {
+        $store = $this->createStore();
+        $store->replaceList('own', ['45.155.205.0/24'], 1000);
+        $store->addBlock(new Block('45.155.205.0/24', time(), 0, source: 'manual'), false);
+        $store->replaceList('own', [], 2000);
+
+        $this->assertSame('45.155.205.0/24', $store->read('45.155.205.1')->network);
+        $store->replaceList('own', ['45.155.205.0/24'], 3000);
+        $store->removeBlock('45.155.205.0/24');
+        $this->assertSame('own', $store->read('45.155.205.1')->listed);
+    }
+
+    public function test_a_large_list_is_imported_and_looked_up(): void
+    {
+        $networks = [];
+        for ($i = 0; $i < 20_000; $i++) {
+            $networks[] = sprintf('45.%d.%d.0/24', intdiv($i, 256), $i % 256);
+        }
+        $store = $this->createStore();
+        $store->replaceList('big', $networks, 1000);
+
+        $this->assertSame('big', $this->createStore()->read('45.77.200.9')->listed);
+        $this->assertNull($store->read('46.0.0.1')->listed);
+        $this->assertSame(20_000, $store->listStatus()['big']['count']);
+    }
+
+    public function test_the_marker_carries_the_lists_version(): void
+    {
+        $store = $this->createStore();
+        $store->saveMarker('abc', 3);
+        $this->assertSame(['owner' => 'abc', 'version' => 3, 'listsVersion' => -1], $store->marker());
+
+        $store->saveMarker('abc', 3, 9);
+        $this->assertSame(['owner' => 'abc', 'version' => 3, 'listsVersion' => 9], $this->createStore()->marker());
     }
 }

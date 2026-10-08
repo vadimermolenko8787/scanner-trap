@@ -123,6 +123,63 @@ final class ApcuLocalStore implements LocalStore
         return false;
     }
 
+    public function replaceList(string $source, array $networks, int $at): void
+    {
+        $wanted = [];
+        foreach ($networks as $cidr) {
+            $network = Network::parse($cidr);
+            if ($network !== null) {
+                $wanted[$network->cidr()] = $network;
+            }
+        }
+        // New entries first, removals after: a reader may see a superset for an instant, never a gap
+        foreach ($wanted as $cidr => $network) {
+            $sources = apcu_fetch($this->key('lnet:' . $cidr));
+            $sources = is_array($sources) ? $sources : [];
+            if (!in_array($source, $sources, true)) {
+                $sources[] = $source;
+                apcu_store($this->key('lnet:' . $cidr), $sources);
+            }
+            apcu_store($this->key('netlen:' . $network->token()), 1);
+        }
+        $old = apcu_fetch($this->key('list:' . $source));
+        foreach (is_array($old) ? $old : [] as $cidr) {
+            if (!is_string($cidr) || isset($wanted[$cidr])) {
+                continue;
+            }
+            $sources = apcu_fetch($this->key('lnet:' . $cidr));
+            $sources = array_values(array_filter(is_array($sources) ? $sources : [], static fn (mixed $name): bool => $name !== $source));
+            if ($sources === []) {
+                apcu_delete($this->key('lnet:' . $cidr));
+            } else {
+                apcu_store($this->key('lnet:' . $cidr), $sources);
+            }
+        }
+        $status = apcu_fetch($this->key('lists'));
+        $status = is_array($status) ? $status : [];
+        if ($wanted === []) {
+            apcu_delete($this->key('list:' . $source));
+            unset($status[$source]);
+        } else {
+            apcu_store($this->key('list:' . $source), array_keys($wanted));
+            $status[$source] = ['count' => count($wanted), 'at' => $at];
+        }
+        apcu_store($this->key('lists'), $status);
+    }
+
+    public function listStatus(): array
+    {
+        $status = apcu_fetch($this->key('lists'));
+        $result = [];
+        foreach (is_array($status) ? $status : [] as $source => $entry) {
+            if (is_string($source) && is_array($entry) && is_int($entry['count'] ?? null) && is_int($entry['at'] ?? null)) {
+                $result[$source] = ['count' => $entry['count'], 'at' => $entry['at']];
+            }
+        }
+        ksort($result);
+        return $result;
+    }
+
     public function marker(): ?array
     {
         $value = apcu_fetch($this->key('owner'));
@@ -130,12 +187,12 @@ final class ApcuLocalStore implements LocalStore
         if (!is_array($data) || !is_string($data['owner'] ?? null) || !is_int($data['version'] ?? null)) {
             return null;
         }
-        return ['owner' => $data['owner'], 'version' => $data['version']];
+        return ['owner' => $data['owner'], 'version' => $data['version'], 'listsVersion' => is_int($data['listsVersion'] ?? null) ? $data['listsVersion'] : -1];
     }
 
-    public function saveMarker(string $owner, int $version): void
+    public function saveMarker(string $owner, int $version, int $listsVersion = -1): void
     {
-        apcu_store($this->key('owner'), $this->json(['owner' => $owner, 'version' => $version]));
+        apcu_store($this->key('owner'), $this->json(['owner' => $owner, 'version' => $version, 'listsVersion' => $listsVersion]));
     }
 
     public function lock(int $seconds): bool

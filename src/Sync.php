@@ -54,7 +54,7 @@ final class Sync
         $version = $this->central->version();
         if ($marker === null || $marker['version'] !== $version) {
             $this->local->replaceLists($this->central->patterns(), $this->central->allowEntries());
-            $this->local->saveMarker($owner, $version);
+            $this->local->saveMarker($owner, $version, $marker['listsVersion'] ?? -1);
         }
 
         $central = [];

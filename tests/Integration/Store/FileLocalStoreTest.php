@@ -165,4 +165,37 @@ final class FileLocalStoreTest extends LocalStoreContract
         $this->assertFileDoesNotExist($stale);
         $this->assertFileExists($second);
     }
+
+    public function test_a_corrupt_lists_pointer_or_file_makes_a_corrupt_snapshot(): void
+    {
+        mkdir($this->dir, 0775, true);
+        file_put_contents($this->dir . '/lists.current', '../../etc/passwd');
+        $this->assertTrue($this->createStore()->read('45.155.205.1')->corrupt);
+
+        file_put_contents($this->dir . '/lists.current', 'lists-0123456789abcdef.bin');
+        file_put_contents($this->dir . '/lists-0123456789abcdef.bin', 'garbage');
+        $this->assertTrue($this->createStore()->read('45.155.205.1')->corrupt);
+    }
+
+    public function test_a_superseded_lists_file_is_kept_for_ten_minutes_after_it_stops_being_current(): void
+    {
+        $store = $this->createStore();
+        $store->replaceList('own', ['45.155.205.0/24'], 1000);
+        $first = $this->dir . '/' . trim((string) file_get_contents($this->dir . '/lists.current'));
+        touch($first, time() - 3600);
+
+        $store->replaceList('own', ['91.92.248.0/22'], 2000);
+        $second = $this->dir . '/' . trim((string) file_get_contents($this->dir . '/lists.current'));
+
+        $this->assertFileExists($first);
+        $this->assertNotSame($first, $second);
+
+        $stale = $this->dir . '/lists-0123456789abcdef.bin';
+        file_put_contents($stale, 'old');
+        touch($stale, time() - 3600);
+        $store->replaceList('own', ['185.0.0.0/16'], 3000);
+
+        $this->assertFileDoesNotExist($stale);
+        $this->assertFileExists($second);
+    }
 }

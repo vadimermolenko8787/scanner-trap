@@ -83,6 +83,17 @@ final class Network
         return $this->family . '/' . $this->prefix;
     }
 
+    /** @return array{string, string} the first and the last address, packed as inet_pton() returns them */
+    public function range(): array
+    {
+        $last = '';
+        for ($i = 0; $i < strlen($this->packed); $i++) {
+            $networkBits = max(0, min(8, $this->prefix - $i * 8));
+            $last .= chr(ord($this->packed[$i]) | ((0xff >> $networkBits) & 0xff));
+        }
+        return [$this->packed, $last];
+    }
+
     public function contains(string $ip): bool
     {
         $other = self::parse($ip);

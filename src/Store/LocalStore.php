@@ -49,10 +49,22 @@ interface LocalStore
     /** Waits up to $seconds for a queued event; true as soon as there is one. */
     public function waitForEvents(int $seconds): bool;
 
-    /** @return array{owner: string, version: int}|null the central store this one follows, and the lists' version */
+    /**
+     * Makes $networks (normalized CIDRs) exactly the networks listing $source; readers switch from the old set to the
+     * new one in one step (APCu: a superset for an instant). [] removes the source. A network stays listed while any
+     * source lists it.
+     *
+     * @param list<string> $networks
+     */
+    public function replaceList(string $source, array $networks, int $at): void;
+
+    /** @return array<string, array{count: int, at: int}> every source with entries: their number and the import time */
+    public function listStatus(): array;
+
+    /** @return array{owner: string, version: int, listsVersion: int}|null the central store this one follows, the patterns' version and the lists' version (-1: stored before it existed) */
     public function marker(): ?array;
 
-    public function saveMarker(string $owner, int $version): void;
+    public function saveMarker(string $owner, int $version, int $listsVersion = -1): void;
 
     /** The sync lock; false when another process holds it. A store may hold it until unlock() or until the holder exits (file store) rather than for exactly $seconds. */
     public function lock(int $seconds): bool;

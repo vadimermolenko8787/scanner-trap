@@ -129,4 +129,16 @@ final class NetworkTest extends TestCase
     {
         $this->assertSame($expected, Network::parse($network)?->isReserved());
     }
+
+    public function test_range_gives_the_first_and_last_address(): void
+    {
+        [$first, $last] = Network::parse('45.155.205.0/24')?->range() ?? ['', ''];
+        $this->assertSame(['45.155.205.0', '45.155.205.255'], [inet_ntop($first), inet_ntop($last)]);
+
+        [$first, $last] = Network::parse('2a01:4f8:c0c:1234::/64')?->range() ?? ['', ''];
+        $this->assertSame(['2a01:4f8:c0c:1234::', '2a01:4f8:c0c:1234:ffff:ffff:ffff:ffff'], [inet_ntop($first), inet_ntop($last)]);
+
+        [$first, $last] = Network::parse('45.155.205.7')?->range() ?? ['', ''];
+        $this->assertSame($first, $last);
+    }
 }

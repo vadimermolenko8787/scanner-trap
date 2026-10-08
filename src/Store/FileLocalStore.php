@@ -16,6 +16,7 @@ use ScannerTrap\Snapshot;
  * and re-read only when the file behind them changes (inode, mtime or size: replaceLists() renames a new file in).
  * Networks live in a PHP file returning an array, renamed under a new name on every write (networks.current points to
  * it): opcache serves it from memory, and a new name is seen even with opcache.validate_timestamps=0.
+ * Imported lists: per-source CIDR files and one range file built from them (RangeFile), named by lists.current.
  *
  * @phpstan-type NetworkData array{blocks: array<int, array<int, array<string, array<mixed>>>>}
  */
@@ -32,6 +33,9 @@ final class FileLocalStore implements LocalStore
     private const NETWORKS = 'networks.current';
     private const NETWORKS_LOCK = 'networks.lock';
     private const NETWORKS_KEEP = 600;
+    private const LISTS_DIR = 'lists';
+    private const LISTS = 'lists.current';
+    private const LISTS_LOCK = 'lists.lock';
     private const NO_NETWORKS = ['blocks' => []];
 
     /** @var array<string, array{string, ?string}> path => [stat key, contents] */
@@ -49,10 +53,11 @@ final class FileLocalStore implements LocalStore
     {
         try {
             $network = $this->matchNetworks($this->networks(), $ip);
+            $listed = $this->listedBy($ip);
         } catch (StoreException) {
             return new Snapshot(false, null, null, true);
         }
-        return Snapshot::decode($network !== null || $this->isBlocked($ip), $this->cached(self::PATTERNS), $this->cached(self::ALLOW), $network);
+        return Snapshot::decode($network !== null || $this->isBlocked($ip), $this->cached(self::PATTERNS), $this->cached(self::ALLOW), $network, $listed);
     }
 
     public function addBlock(Block $block, bool $recordEvent, ?Escalation $escalation = null): bool
@@ -173,6 +178,72 @@ final class FileLocalStore implements LocalStore
         $this->writeAtomically(self::ALLOW, $this->json(array_map(static fn (AllowEntry $e): array => $e->toArray(), $allow)));
     }
 
+    public function replaceList(string $source, array $networks, int $at): void
+    {
+        if (preg_match('/^[a-z0-9-]{1,32}$/', $source) !== 1) {
+            throw new \InvalidArgumentException("Not a list source name: {$source}");
+        }
+        $wanted = [];
+        foreach ($networks as $cidr) {
+            $network = Network::parse($cidr);
+            if ($network !== null) {
+                $wanted[$network->cidr()] = true;
+            }
+        }
+        $this->ensureDir($this->dir . '/' . self::LISTS_DIR);
+        $handle = @fopen($this->dir . '/' . self::LISTS_LOCK, 'c');
+        if ($handle === false) {
+            throw new StoreException("Cannot open the lists lock in {$this->dir}");
+        }
+        try {
+            flock($handle, LOCK_EX);
+            $status = $this->listStatus();
+            $sourceFile = self::LISTS_DIR . "/{$source}.txt";
+            if ($wanted === []) {
+                @unlink($this->dir . '/' . $sourceFile);
+                unset($status[$source]);
+            } else {
+                $this->writeAtomically($sourceFile, implode("\n", array_keys($wanted)) . "\n");
+                $status[$source] = ['count' => count($wanted), 'at' => $at];
+            }
+            ksort($status);
+            $this->writeAtomically(self::LISTS_DIR . '/status.json', $this->json($status));
+            $sources = [];
+            foreach (array_keys($status) as $name) {
+                $lines = @file($this->dir . '/' . self::LISTS_DIR . "/{$name}.txt", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+                $sources[$name] = $lines === false ? [] : $lines;
+            }
+            $previous = trim((string) @file_get_contents($this->dir . '/' . self::LISTS));
+            $name = 'lists-' . bin2hex(random_bytes(8)) . '.bin';
+            $this->writeAtomically($name, RangeFile::build($sources));
+            $this->writeAtomically(self::LISTS, $name);
+            // The previous file stops being current now: its 10 minutes start here, not when it was written
+            if (preg_match('/^lists-[0-9a-f]{16}\.bin$/', $previous) === 1) {
+                @touch($this->dir . '/' . $previous);
+            }
+            foreach (glob($this->dir . '/lists-*.bin') ?: [] as $old) {
+                if (basename($old) !== $name && (int) @filemtime($old) < time() - self::NETWORKS_KEEP) {
+                    @unlink($old);
+                }
+            }
+        } finally {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+        }
+    }
+
+    public function listStatus(): array
+    {
+        $data = json_decode((string) @file_get_contents($this->dir . '/' . self::LISTS_DIR . '/status.json'), true);
+        $status = [];
+        foreach (is_array($data) ? $data : [] as $name => $entry) {
+            if (is_string($name) && is_array($entry) && is_int($entry['count'] ?? null) && is_int($entry['at'] ?? null)) {
+                $status[$name] = ['count' => $entry['count'], 'at' => $entry['at']];
+            }
+        }
+        return $status;
+    }
+
     public function events(int $limit): array
     {
         $events = [];
@@ -249,12 +320,12 @@ final class FileLocalStore implements LocalStore
         if (!is_array($data) || !is_string($data['owner'] ?? null) || !is_int($data['version'] ?? null)) {
             return null;
         }
-        return ['owner' => $data['owner'], 'version' => $data['version']];
+        return ['owner' => $data['owner'], 'version' => $data['version'], 'listsVersion' => is_int($data['listsVersion'] ?? null) ? $data['listsVersion'] : -1];
     }
 
-    public function saveMarker(string $owner, int $version): void
+    public function saveMarker(string $owner, int $version, int $listsVersion = -1): void
     {
-        $this->writeAtomically(self::OWNER, $this->json(['owner' => $owner, 'version' => $version]));
+        $this->writeAtomically(self::OWNER, $this->json(['owner' => $owner, 'version' => $version, 'listsVersion' => $listsVersion]));
     }
 
     public function lock(int $seconds): bool
@@ -311,6 +382,20 @@ final class FileLocalStore implements LocalStore
             }
         }
         return $network;
+    }
+
+    /** The source listing $ip, from the current range file; null when nothing was ever imported. */
+    private function listedBy(string $ip): ?string
+    {
+        $pointer = @file_get_contents($this->dir . '/' . self::LISTS);
+        if ($pointer === false) {
+            return null;
+        }
+        $pointer = trim($pointer);
+        if (preg_match('/^lists-[0-9a-f]{16}\.bin$/', $pointer) !== 1) {
+            throw new StoreException('lists.current does not name a lists file');
+        }
+        return RangeFile::lookup($this->dir . '/' . $pointer, $ip);
     }
 
     /** @return NetworkData */
