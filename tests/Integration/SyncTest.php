@@ -51,11 +51,12 @@ final class SyncTest extends TestCase
         (new Guard($store, true, $ttl, 'web', [], ['/.env*']))->decide(new RequestContext($ip, 'GET', '/.env'));
     }
 
-    /** @return LocalStore&object{added: int} the store, counting addBlock() calls */
+    /** @return LocalStore&object{added: int, removed: int} the store, counting addBlock() and removeBlock() calls */
     private function spy(FileLocalStore $store): LocalStore
     {
         return new class ($store) implements LocalStore {
             public int $added = 0;
+            public int $removed = 0;
 
             public function __construct(private readonly FileLocalStore $inner)
             {
@@ -72,6 +73,11 @@ final class SyncTest extends TestCase
                 return $this->inner->addBlock($block, $recordEvent, $escalation);
             }
 
+            public function block(string $target): ?Block
+            {
+                return $this->inner->block($target);
+            }
+
             public function blocks(): array
             {
                 return $this->inner->blocks();
@@ -79,6 +85,7 @@ final class SyncTest extends TestCase
 
             public function removeBlock(string $target): void
             {
+                $this->removed++;
                 $this->inner->removeBlock($target);
             }
 
@@ -542,16 +549,29 @@ final class SyncTest extends TestCase
         $this->assertFalse($this->b->read('45.155.205.1')->blocked);
     }
 
-    public function test_a_lift_followed_by_a_new_block_of_the_same_target_leaves_the_new_block(): void
+    public function test_a_lift_followed_by_a_longer_block_of_the_same_target_takes_the_new_expiry(): void
     {
-        $this->central->insertBlocks([new Block('45.155.205.1', time(), 0)]);
+        $this->central->insertBlocks([new Block('45.155.205.1', time(), time() + 600)]);
         (new Sync($this->b, $this->central))->pull();
         $this->central->lift('45.155.205.1', 'ops');
-        $this->central->insertBlocks([new Block('45.155.205.1', time(), time() + 600)]);
+        $this->central->insertBlocks([new Block('45.155.205.1', time(), time() + 4000)]);
 
         (new Sync($this->b, $this->central))->pull();
 
-        $this->assertTrue($this->b->read('45.155.205.1')->blocked);
+        $this->assertEqualsWithDelta(time() + 4000, $this->b->block('45.155.205.1')?->expiresAt, 2);
+    }
+
+    public function test_a_block_pushed_from_here_comes_back_without_being_rewritten(): void
+    {
+        $spy = $this->spy($this->a);
+        (new Sync($spy, $this->central))->pull();
+        $this->trap($this->a);
+        (new Sync($spy, $this->central))->push();
+
+        (new Sync($spy, $this->central))->pull();
+
+        $this->assertSame(0, $spy->removed);
+        $this->assertTrue($this->a->read(self::SCANNER)->blocked);
     }
 
     public function test_an_extension_reaches_the_other_server_once_the_full_pass_is_due(): void

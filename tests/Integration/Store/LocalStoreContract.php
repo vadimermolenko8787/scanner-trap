@@ -60,6 +60,20 @@ abstract class LocalStoreContract extends TestCase
         $this->assertTrue($store->addBlock(new Block('203.0.113.7', time(), time() + 60), false));
     }
 
+    public function test_one_block_is_read_back_by_its_target_while_it_is_active(): void
+    {
+        $store = $this->createStore();
+        $store->addBlock(new Block('45.155.205.9', time(), time() + 600, 'web1'), false);
+        $store->addBlock(new Block('91.92.248.0/24', time(), 0, 'web1', source: Block::SOURCE_SUBNET), false);
+        $store->addBlock(new Block('91.92.249.7', time() - 20, time() - 10), false);
+
+        $this->assertEqualsWithDelta(time() + 600, $store->block('45.155.205.9')?->expiresAt, 2);
+        $this->assertSame([0, Block::SOURCE_SUBNET], [$store->block('91.92.248.0/24')?->expiresAt, $store->block('91.92.248.0/24')?->source]);
+        $this->assertNull($store->block('91.92.248.7'), 'an address inside a blocked network has no block of its own');
+        $this->assertNull($store->block('91.92.249.7'));
+        $this->assertNull($store->block('2001:41d0::/64'));
+    }
+
     public function test_a_block_is_removed(): void
     {
         $store = $this->createStore();

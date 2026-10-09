@@ -152,27 +152,42 @@ final class Sync
         }
         // An expiry extended by a merge on another server, or made forever, arrives here at the latest on a full pass
         foreach (array_intersect_key($central, $local) as $ip => $block) {
-            $mine = $local[$ip]->expiresAt;
-            if ($mine !== 0 && ($block->expiresAt === 0 || $block->expiresAt > $mine)) {
-                $this->local->removeBlock((string) $ip);
-                $this->local->addBlock($block, false);
-            }
+            $this->replaceIfLonger($block, $local[$ip]);
         }
         return $lastId;
+    }
+
+    /** The central block replaces the local one of the same target when it lasts longer. */
+    private function replaceIfLonger(Block $central, Block $mine): void
+    {
+        if ($mine->expiresAt !== 0 && ($central->expiresAt === 0 || $central->expiresAt > $mine->expiresAt)) {
+            $this->local->removeBlock($central->ip);
+            $this->local->addBlock($central, false);
+        }
     }
 
     /** Only what changed since the previous pull: blocks inserted after $lastId, targets lifted since $pulledAt. */
     private function catchUp(int $lastId, int $pulledAt): int
     {
         foreach ($this->central->blocksAfter($lastId, self::ALL) as $id => $block) {
-            $this->local->addBlock($block, false);
+            // Already blocked here: this server's own block coming back, or a target lifted and blocked anew elsewhere
+            if (!$this->local->addBlock($block, false)) {
+                $mine = $this->local->block($block->ip);
+                if ($mine !== null) {
+                    $this->replaceIfLonger($block, $mine);
+                }
+            }
             $lastId = max($lastId, $id);
+        }
+        $lifted = $this->central->liftedSince($pulledAt - self::CLOCK_MARGIN);
+        if ($lifted === []) {
+            return $lastId;
         }
         $pending = [];
         foreach ($this->local->events(self::ALL) as $event) {
             $pending[$event->ip] = true;
         }
-        foreach ($this->central->liftedSince($pulledAt - self::CLOCK_MARGIN) as $target) {
+        foreach ($lifted as $target) {
             if (!isset($pending[$target])) {
                 $this->local->removeBlock($target);
             }

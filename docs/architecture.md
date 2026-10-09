@@ -143,8 +143,10 @@ network's latest lift, and inserts a `subnet` block at the threshold: hits on di
 3. full reconciliation when the marker is absent, `lastId` is -1 or `fullAt` is an hour old: missing central blocks
    are added, local blocks without an active central one removed, a local block with a later central expiry replaced;
    `lastId` becomes the highest central id seen;
-4. otherwise incremental: active central blocks with an id above `lastId` are added (`lastId` advances), and
-   targets lifted since `pulledAt` minus 60 s (clock margin) and not blocked again are removed;
+4. otherwise incremental: active central blocks with an id above `lastId` are added (`lastId` advances); one whose
+   target is already blocked here replaces the local block when it lasts longer (a target lifted and blocked anew
+   elsewhere), and this server's own blocks coming back are left as they are; targets lifted since `pulledAt` minus
+   60 s (clock margin) and not blocked again are removed;
 5. saves the marker.
 
 Ids work as a cursor because inserts hold the `version` row lock, so they commit in id order. An expiry extended by a

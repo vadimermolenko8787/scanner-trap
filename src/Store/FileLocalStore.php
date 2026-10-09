@@ -119,6 +119,18 @@ final class FileLocalStore implements LocalStore
         }
     }
 
+    public function block(string $target): ?Block
+    {
+        if (!str_contains($target, '/')) {
+            $file = $this->blockFile($target);
+            return is_file($file) ? $this->readBlock($file) : null;
+        }
+        $network = Network::parse($target);
+        $data = $network === null ? null : ($this->networks()['blocks'][$network->family][$network->prefix][$network->address] ?? null);
+        $block = is_array($data) ? Block::fromArray($data) : null;
+        return $block !== null && $block->isActive(time()) ? $block : null;
+    }
+
     public function blocks(): array
     {
         $blocks = [];

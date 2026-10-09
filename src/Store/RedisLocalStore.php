@@ -138,6 +138,14 @@ final class RedisLocalStore implements LocalStore
         return $this->script(self::BLOCK_SCRIPT, $keys, $args) === 1;
     }
 
+    public function block(string $target): ?Block
+    {
+        $value = $this->redis->raw('GET', $this->targetKey($target));
+        $data = is_string($value) ? json_decode($value, true) : null;
+        $block = is_array($data) ? Block::fromArray($data) : null;
+        return $block !== null && $block->isActive(time()) ? $block : null;
+    }
+
     public function blocks(): array
     {
         $blocks = [];

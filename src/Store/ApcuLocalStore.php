@@ -67,6 +67,11 @@ final class ApcuLocalStore implements LocalStore
         return $created;
     }
 
+    public function block(string $target): ?Block
+    {
+        return $this->active(apcu_fetch($this->targetKey($target)));
+    }
+
     public function blocks(): array
     {
         $blocks = [];

@@ -27,6 +27,9 @@ interface LocalStore
      */
     public function addBlock(Block $block, bool $recordEvent, ?Escalation $escalation = null): bool;
 
+    /** The active block of exactly this IP or network, null for none; a network covering an IP does not count. */
+    public function block(string $target): ?Block;
+
     /** @return list<Block> the active blocks */
     public function blocks(): array;
 
