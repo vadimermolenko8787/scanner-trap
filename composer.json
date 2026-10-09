@@ -1,9 +1,16 @@
 {
     "name": "vadimermolenko8787/scanner-trap",
-    "description": "Blacklists vulnerability scanners on their first request to a decoy path. Redis, file or APCu stores, optional central database.",
+    "description": "Blacklists vulnerability scanners on their first probe of a decoy path such as /.env. File, Redis or APCu storage, optional central database for several servers.",
     "type": "library",
     "license": "MIT",
-    "keywords": ["security", "scanner", "honeypot", "blacklist", "psr-15", "redis"],
+    "authors": [{"name": "Vadym Yermolenko", "homepage": "https://github.com/vadimermolenko8787"}],
+    "keywords": ["security", "scanner", "vulnerability-scanner", "honeypot", "blacklist", "ip-blocking", "firewall", "waf", "middleware", "psr-15", "redis"],
+    "homepage": "https://github.com/vadimermolenko8787/scanner-trap",
+    "support": {
+        "issues": "https://github.com/vadimermolenko8787/scanner-trap/issues",
+        "source": "https://github.com/vadimermolenko8787/scanner-trap",
+        "security": "https://github.com/vadimermolenko8787/scanner-trap/security/policy"
+    },
     "require": {
         "php": ">=8.1",
         "psr/http-factory": "^1.0",

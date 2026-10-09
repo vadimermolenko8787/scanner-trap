@@ -1,0 +1,52 @@
+name: Bug report
+description: Something does not work as described
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: If the bug lets scanners through or locks real visitors out, please report it privately as described in SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: php
+    attributes:
+      label: PHP version
+      placeholder: "8.3.12"
+    validations:
+      required: true
+  - type: dropdown
+    id: setup
+    attributes:
+      label: Setup
+      options:
+        - One server, file store
+        - One server, Redis
+        - One server, APCu
+        - Several servers, shared Redis
+        - Several servers, central database
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Your scanner-trap.php with passwords removed.
+      render: php
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output
+      description: Lines from your PSR-3 logger or the CLI output.
+      render: text

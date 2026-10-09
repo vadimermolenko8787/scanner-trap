@@ -1,0 +1,17 @@
+name: Feature request or new pattern
+description: Suggest an improvement or a decoy pattern
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+      description: For a new pattern, where you saw the probe and why no real visitor would ever send it.
+    validations:
+      required: true
