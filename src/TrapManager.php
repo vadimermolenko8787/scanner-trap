@@ -284,7 +284,8 @@ final class TrapManager
     }
 
     /**
-     * Drops history older than $keep seconds: central rows lifted or expired before then, and the file store's leftovers.
+     * Drops history older than $keep seconds: central rows lifted before then, rows never lifted that expired before then,
+     * and the file store's leftovers.
      * The keep may not be shorter than the subnet window or an hour plus the clock margin: central escalation and the
      * hourly full sync read the lift history.
      *

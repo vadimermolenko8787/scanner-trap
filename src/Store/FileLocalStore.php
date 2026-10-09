@@ -14,7 +14,7 @@ use ScannerTrap\Snapshot;
 /**
  * A directory: one file per blocked IP, JSON lists, an append-only event log. The lists are decoded once per process
  * and re-read only when the file behind them changes (inode, mtime or size: replaceLists() renames a new file in).
- * Networks live in networks.json, read through the same per-process cache.
+ * Networks live in networks.json, read through the same per-process cache and decoded once per change.
  * Imported lists: per-source CIDR files and one range file built from them (RangeFile), named by lists.current.
  *
  * @phpstan-type NetworkData array{blocks: array<int, array<int, array<string, array<mixed>>>>}
@@ -39,6 +39,8 @@ final class FileLocalStore implements LocalStore
 
     /** @var array<string, array{string, ?string}> path => [stat key, contents] */
     private static array $cache = [];
+    /** @var array<string, array{string, NetworkData}> path => [the JSON cached() returned, its decoded networks] */
+    private static array $decodedNetworks = [];
     /** @var resource|null */
     private $lock = null;
 
@@ -458,7 +460,15 @@ final class FileLocalStore implements LocalStore
     private function networks(): array
     {
         $json = $this->cached(self::NETWORKS);
-        return $json === null ? self::NO_NETWORKS : $this->decodeNetworks($json);
+        if ($json === null) {
+            return self::NO_NETWORKS;
+        }
+        // Decoded once per change: the same cached string comes back until the file changes
+        $path = $this->dir . '/' . self::NETWORKS;
+        if ((self::$decodedNetworks[$path][0] ?? null) !== $json) {
+            self::$decodedNetworks[$path] = [$json, $this->decodeNetworks($json)];
+        }
+        return self::$decodedNetworks[$path][1];
     }
 
     /** @return NetworkData */

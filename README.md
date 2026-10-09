@@ -94,7 +94,7 @@ with its own worker can call `ScannerTrap::fromConfig($config)->manager()->sync(
 | `block <ip or cidr> [--reason=…] [--ttl=…]` | manual block; `--ttl=0` is forever; refused for a whitelisted IP, or a network that is reserved or overlaps the whitelist |
 | `unblock <ip or cidr>` | lift the block everywhere (a network's escalation count starts afresh); an address still inside a blocked network is reported as such |
 | `import [--source=…]` | fetch the configured blocklists (all, or one) |
-| `prune [--keep=…]` | drop lifted and expired blocks older than the keep (30 days) from the central database, and expired files from the file store |
+| `prune [--keep=…]` | drop from the central database blocks lifted, or never lifted and expired, longer ago than the keep (30 days), and expired files from the file store |
 | `lists` | each list source with its size and last import |
 | `pattern:list`, `pattern:add <p>`, `pattern:remove <p>` | decoy patterns, validated |
 | `allow:list`, `allow:add <entry> [--comment=…] [--ttl=…]`, `allow:remove <entry>` | whitelist |
